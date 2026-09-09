@@ -18,16 +18,15 @@
  *   PC  → "CONFIG_READ"       → читает EEPROM, отвечает "CONFIG:..."
  *   PC  → "VERIFY"            → читает и считает CRC, отвечает "OK:CRC=XXXX" или "ERROR:CRC"
  *   PC  → "PING"              → "PONG"
- *
- * Роль терминала (STORE/ATM/…) настраивается на прошивке Terminal_ESP32
- * командой TERMINAL_ROLE:STORE — не на Chip_Programmer (это прошивка чипов).
+ *   PC  → "LORA_TX:..."       → "ERROR:NO_LORA" (LoRa только на Мастер-Пульте)
  *
  * Формат CONFIG_WRITE:
- *   type=0,sub=0,uses=1,p0=50,p1=0,p2=0,p3=0,p4=0,p5=0,p6=0,p7=0,p8=0
+ *   type=0,sub=0,uses=1,p0=50,...,name=Иван
  *   type: 0=Расходники, 1=Броня, 2=Артефакт, 3=Админка
- *   sub:  подтип (для расходников и админки)
+ *   sub:  подтип (для расходников и админки; 7 = РЕГИСТРАЦИЯ)
  *   uses: кол-во использований (255 = бесконечно)
  *   p0..p15: параметры (знаковые int16)
+ *   name=: UTF-8 в расширение EEPROM @0x26 (до 24 байт), чип регистрации
  *
  * Карта EEPROM (адреса байт):
  *   0x00      chip_type  (uint8)
@@ -36,9 +35,11 @@
  *   0x03      резерв
  *   0x04..0x23 params[0..15] (16 x int16, little-endian)
  *   0x24..0x25 CRC16 (little-endian, покрывает 0x00..0x23)
+ *   0x26..    имя / строки (eeprom_protocol.h EEPROM_CHIP_EXT_BASE)
  */
 
 #include <Wire.h>
+#include <string.h>
 #include "../../common/eeprom_protocol.h"
 
 // ─────────────────────────────────────────────────────
@@ -61,6 +62,8 @@
 #define OFF_PARAMS  0x04     // 16 x int16 = 32 байта (0x04..0x23)
 #define OFF_CRC     0x24     // 2 байта (0x24..0x25)
 #define DATA_SIZE   0x24     // байт данных под CRC (0x00..0x23)
+#define OFF_NAME    0x26     // UTF-8 имя, до NAME_MAX байт (с нулём)
+#define NAME_MAX    24
 
 // ─────────────────────────────────────────────────────
 //  СТРУКТУРА ДАННЫХ ЧИПА
@@ -187,6 +190,30 @@ String chipToString(const ChipData& d) {
     return s;
 }
 
+String extractChipName(const String& cfg) {
+    int idx = cfg.indexOf("name=");
+    if (idx < 0)
+        return "";
+    int start = idx + 5;
+    int end = cfg.indexOf(',', start);
+    if (end < 0)
+        end = cfg.length();
+    String n = cfg.substring(start, end);
+    n.trim();
+    return n;
+}
+
+bool writeChipName(const String& name) {
+    uint8_t buf[NAME_MAX];
+    memset(buf, 0, NAME_MAX);
+    size_t n = name.length();
+    if (n > NAME_MAX - 1)
+        n = NAME_MAX - 1;
+    if (n)
+        memcpy(buf, name.c_str(), n);
+    return eepromWriteBlock(OFF_NAME, buf, NAME_MAX);
+}
+
 // ─────────────────────────────────────────────────────
 //  РАЗБОР КОНФИГА (key=value через запятую)
 // ─────────────────────────────────────────────────────
@@ -227,6 +254,9 @@ void processCommand(const String& cmd) {
     else if (cmd == "PING") {
         Serial.println("PONG");
     }
+    else if (cmd.startsWith("LORA_TX:")) {
+        Serial.println("ERROR:NO_LORA");
+    }
     else if (cmd.startsWith("CONFIG_WRITE:")) {
         String cfg = cmd.substring(13);
         ChipData d = parseChipConfig(cfg);
@@ -244,6 +274,10 @@ void processCommand(const String& cmd) {
                 uint16_t calc = crc16(buf, DATA_SIZE);
                 if (calc == crc) {
                     char hex[8]; snprintf(hex, sizeof(hex), "%04X", crc);
+                    String nm = extractChipName(cfg);
+                    if (nm.length() || (d.chip_type == 3 && d.chip_sub == 7)) {
+                        writeChipName(nm);
+                    }
                     Serial.println("OK:WRITTEN:CRC=" + String(hex));
                 } else {
                     Serial.println("ERROR:VERIFY_FAILED:CRC_MISMATCH");

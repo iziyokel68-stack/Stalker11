@@ -1,7 +1,7 @@
 """
 STALKER App — модуль «Регистрация» (docs/PROGRESSION.txt §10.1, §10.3 Фаза 2)
 ================================================================================
-Список участников события, запись имени на ПДА (CONFIG:REGISTER), допуск.
+Список участников: № = адрес LoRa. Имя на ПДА — EEPROM-чип (CHIP_BOX).
 """
 
 import time
@@ -98,8 +98,13 @@ class RegistrationFrame(ttk.Frame):
         row("Имя *", self.var_name)
         row("Позывной", self.var_callsign)
         row("Группа", self.var_group)
-        row("PDA UID", self.var_pda_uid)
         row("Заметки", self.var_notes)
+        ttk.Label(form, text="PDA UID — опционально, с чипа/NVS позже",
+                  style="Dim.TLabel").pack(anchor="w", padx=8)
+        ttk.Entry(form, textvariable=self.var_pda_uid, width=26).pack(
+            anchor="w", padx=8, pady=(0, 4))
+        ttk.Button(form, text="Привязать UID вручную", command=self._bind_pda).pack(
+            fill="x", padx=8, pady=2)
         self.lbl_status = ttk.Label(form, text="Статус: новый", style="Dim.TLabel")
         self.lbl_status.pack(anchor="w", padx=8, pady=(4, 8))
 
@@ -107,13 +112,11 @@ class RegistrationFrame(ttk.Frame):
             fill="x", padx=8, pady=2)
         ttk.Button(form, text="Сохранить изменения", command=self._save_player).pack(
             fill="x", padx=8, pady=2)
-        ttk.Button(form, text="Привязать UID вручную", command=self._bind_pda).pack(
+        ttk.Button(form, text="Прошить чип регистрации", style="Accent.TButton",
+                   command=self._write_reg_chip).pack(fill="x", padx=8, pady=(10, 2))
+        ttk.Button(form, text="Прошить чип допуска", command=self._write_admit_chip).pack(
             fill="x", padx=8, pady=2)
-        ttk.Button(form, text="Считать UID с ПДА", command=self._read_uid).pack(
-            fill="x", padx=8, pady=2)
-        ttk.Button(form, text="Записать на ПДА (USB)", style="Accent.TButton",
-                   command=self._write_pda).pack(fill="x", padx=8, pady=(10, 2))
-        ttk.Button(form, text="Допуск в игру (USB)", command=self._admit_pda).pack(
+        ttk.Button(form, text="Допуск по LoRa (№)", command=self._admit_lora).pack(
             fill="x", padx=8, pady=2)
         ttk.Button(form, text="Допуск только в базе", command=self._admit_db).pack(
             fill="x", padx=8, pady=2)
@@ -127,10 +130,10 @@ class RegistrationFrame(ttk.Frame):
             fill="x", padx=8, pady=2)
 
         note = (
-            "Поток: добавить игрока → подключить ПДА USB →\n"
-            "«Записать на ПДА» (CONFIG:REGISTER) →\n"
-            "«Допуск в игру» (CONFIG:ADMIT).\n"
-            "Без железа UID и допуск можно проставить вручную."
+            "№ в списке = адрес LoRa (0 = все).\n"
+            "Имя на ПДА — чип EEPROM (CHIP_BOX):\n"
+            "прошить → вставить игроку в слот.\n"
+            "ПДА по USB к мастеру не подключают."
         )
         ttk.Label(form, text=note, style="Dim.TLabel", justify="left").pack(
             fill="x", padx=8, pady=(10, 8))
@@ -241,26 +244,7 @@ class RegistrationFrame(ttk.Frame):
         self.refresh()
         self._on_select()
 
-    def _read_uid(self):
-        if self.serial is None:
-            messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
-            return
-        uid, msg = self.serial.read_uid()
-        if not uid:
-            messagebox.showerror("Регистрация", f"UID не считан: {msg}", parent=self)
-            return
-        self.var_pda_uid.set(uid)
-        if self.selected_player_id is not None:
-            try:
-                self.db.bind_pda(self.selected_player_id, uid, registered_by="usb")
-            except Exception as exc:
-                messagebox.showerror("Регистрация", str(exc), parent=self)
-                return
-            self.refresh()
-            self._on_select()
-        messagebox.showinfo("Регистрация", f"UID: {uid}", parent=self)
-
-    def _write_pda(self):
+    def _write_reg_chip(self):
         if self.selected_player_id is None:
             messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
@@ -268,43 +252,58 @@ class RegistrationFrame(ttk.Frame):
             messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
             return
         p = self.db.get_player(self.selected_player_id)
-        ok, resp, uid = self.serial.register_player(
-            p.name, p.callsign or "", p.group_name or ""
-        )
+        ok, resp = self.serial.write_register_chip(p.player_id, p.name)
         if not ok:
             messagebox.showerror(
                 "Регистрация",
-                "ПДА не принял CONFIG:REGISTER.\n"
-                f"{resp}\n\nИмя сохранено в базе; запись на железо — когда ПДА на USB.",
+                "Чип не записан (нужен CHIP_BOX с EEPROM).\n"
+                f"{resp}\nИмя и № сохранены в базе.",
                 parent=self,
             )
             self.db.mark_registered(self.selected_player_id, registered_by="master")
             self.refresh()
             return
-        self.db.mark_registered(
-            self.selected_player_id, registered_by="usb", pda_uid=uid
-        )
-        if uid:
-            self.var_pda_uid.set(uid)
+        self.db.mark_registered(self.selected_player_id, registered_by="eeprom")
         self.refresh()
         self._on_select()
-        messagebox.showinfo("Регистрация", f"Имя записано на ПДА.\n{resp}", parent=self)
+        messagebox.showinfo(
+            "Регистрация",
+            f"Чип №{p.player_id} «{p.name}». Игрок вставляет в слот ПДА.\n{resp}",
+            parent=self,
+        )
 
-    def _admit_pda(self):
+    def _write_admit_chip(self):
         if self.selected_player_id is None:
             messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
         if self.serial is None:
             messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
             return
-        ok, resp = self.serial.admit()
+        ok, resp = self.serial.write_admit_chip()
         if not ok:
-            messagebox.showerror("Допуск", f"CONFIG:ADMIT не прошёл:\n{resp}", parent=self)
+            messagebox.showerror("Допуск", f"Чип допуска не записан:\n{resp}", parent=self)
             return
-        self.db.mark_admitted(self.selected_player_id, admitted_by="usb")
+        self.db.mark_admitted(self.selected_player_id, admitted_by="eeprom")
         self.refresh()
         self._on_select()
-        messagebox.showinfo("Допуск", f"Допуск снят на ПДА.\n{resp}", parent=self)
+        messagebox.showinfo("Допуск", f"Чип допуска готов.\n{resp}", parent=self)
+
+    def _admit_lora(self):
+        if self.selected_player_id is None:
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
+            return
+        if self.serial is None:
+            messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
+            return
+        ok, resp = self.serial.admit_lora(self.selected_player_id)
+        if ok:
+            self.db.mark_admitted(self.selected_player_id, admitted_by="lora")
+            self.refresh()
+            self._on_select()
+            messagebox.showinfo("Допуск", f"LoRa на № {self.selected_player_id}.\n{resp}",
+                                parent=self)
+        else:
+            messagebox.showwarning("Допуск", str(resp), parent=self)
 
     def _admit_db(self):
         if self.selected_player_id is None:

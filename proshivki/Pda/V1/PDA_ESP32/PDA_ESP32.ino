@@ -188,6 +188,7 @@ int cfgStartMoney = 1000;
 int cfgStartLevel = 2; // после регистрации (инструктаж)
 int cfgStartXP = 0;
 int cfgBaseProt[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // Базовые защиты %
+uint8_t dfVolume = 20;                          // DFPlayer 0–30, радио + уведомления
 
 // =====================================================
 // ПРОГРЕССИЯ v4 — MASTER_SPEC §8.5, hardware/PROGRESSION.txt
@@ -197,6 +198,7 @@ void checkLevelUps();
 void checkRankReadyNotify();
 void saveState();
 void completeRegistration(const char *name);
+bool applyDfVolume();
 extern Preferences prefs;
 extern bool needFullRedraw;
 extern bool isAudioReady;
@@ -914,6 +916,9 @@ void loadConfig() {
     snprintf(key, sizeof(key), "bp%d", i);
     cfgBaseProt[i] = prefs.getInt(key, 0);
   }
+  dfVolume = prefs.getUChar("vol", 20);
+  if (dfVolume > 30)
+    dfVolume = 30;
   prefs.end();
 }
 
@@ -931,6 +936,7 @@ void saveConfig() {
     snprintf(key, sizeof(key), "bp%d", i);
     prefs.putInt(key, cfgBaseProt[i]);
   }
+  prefs.putUChar("vol", dfVolume);
   prefs.end();
 }
 
@@ -1041,12 +1047,35 @@ void handleSerialConfig(const String &line) {
 
   if (line.startsWith("CONFIG:EMISSION:")) {
     String data = line.substring(strlen("CONFIG:EMISSION:"));
+    int timer_min = parseIntValue(data, "timer_min");
+    int dur_min = parseIntValue(data, "duration_min");
     int timer = parseIntValue(data, "timer");
     int dur = parseIntValue(data, "duration");
+    if (timer_min >= 0)
+      timer = timer_min * 60;
+    if (dur_min >= 0)
+      dur = dur_min * 60;
+    if (timer < 0)
+      timer = 0;
+    if (dur < 0)
+      dur = 0;
     char buf[48];
-    snprintf(buf, sizeof(buf), "ВЫБРОС %ds / %ds", timer > 0 ? timer : 0,
-             dur > 0 ? dur : 0);
+    snprintf(buf, sizeof(buf), "ВЫБРОС %dм / %dм", timer / 60, dur / 60);
     setEvent(buf, C_RED);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:VOLUME:")) {
+    String data = line.substring(strlen("CONFIG:VOLUME:"));
+    int level = parseIntValue(data, "level");
+    if (level < 0)
+      level = parseIntValue(data, "vol");
+    if (level >= 0) {
+      dfVolume = (uint8_t)constrain(level, 0, 30);
+      saveConfig();
+      applyDfVolume();
+    }
     Serial.println("OK");
     return;
   }
@@ -1055,9 +1084,13 @@ void handleSerialConfig(const String &line) {
     String data = line.substring(strlen("CONFIG:RADIO:"));
     int track = parseIntValue(data, "track");
     int vol = parseIntValue(data, "vol");
+    if (vol >= 0) {
+      dfVolume = (uint8_t)constrain(vol, 0, 30);
+      saveConfig();
+      applyDfVolume();
+    }
     if (isAudioReady && track > 0) {
-      if (vol > 0)
-        myDFPlayer.volume(vol > 30 ? 30 : vol);
+      applyDfVolume();
       myDFPlayer.playMp3Folder(track);
     }
     Serial.println("OK");
@@ -1448,6 +1481,13 @@ bool pollBu03Distance() {
   return true;
 }
 
+bool applyDfVolume() {
+  if (!isAudioReady)
+    return false;
+  myDFPlayer.volume(dfVolume > 30 ? 30 : dfVolume);
+  return true;
+}
+
 bool initDfPlayer() {
   while (mySerial2.available())
     (void)mySerial2.read();
@@ -1456,7 +1496,7 @@ bool initDfPlayer() {
     return false;
   if (myDFPlayer.readState() < 0)
     return false;
-  myDFPlayer.volume(30);
+  applyDfVolume();
   return true;
 }
 

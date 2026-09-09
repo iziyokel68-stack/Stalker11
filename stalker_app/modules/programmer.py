@@ -1,0 +1,376 @@
+"""
+Программатор внутри окна мастера (не отдельный pygame).
+USB — CHIP_BOX / аномалия / убежище / ПДА на столе / терминал.
+ПДА игрока в поле — через LoRa или EEPROM-чип, не этим модулем.
+"""
+
+import os
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+from theme import module_header
+
+PROGRAMMER_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "programmat_pc")
+)
+if PROGRAMMER_DIR not in sys.path:
+    sys.path.insert(0, PROGRAMMER_DIR)
+
+from config_builder import build_config_for_device  # noqa: E402
+
+CHIP_TYPES = ["РАСХОДНИКИ", "БРОНЯ", "АРТЕФАКТЫ", "АДМИНКА"]
+CHIP_SUBTYPES = {
+    0: ["МГНОВЕННОЕ ЛЕЧЕНИЕ", "АНТИРАДИН", "РЕГЕНЕРАТОР",
+        "СТИМУЛЯТОР", "ВОССТАНОВЛЕНИЕ", "УЛУЧШЕНИЕ"],
+    1: ["УНИВЕРСАЛЬНЫЙ ЧИП"],
+    2: ["УНИВЕРСАЛЬНЫЙ ЧИП"],
+    3: ["ВОСКРЕШЕНИЕ", "УПРАВЛЕНИЕ ДЕНЬГАМИ", "УРОВЕНЬ/ОПЫТ",
+        "ИММУНИТЕТ", "СБРОС", "НЕЙТРАЛИЗАЦИЯ", "ДОПУСК В ИГРУ",
+        "РЕГИСТРАЦИЯ"],
+}
+ANOM_TYPES = [
+    "ВЗРЫВ", "КРОВЬ", "ТЕРМО", "ЭЛЕКТРО", "ХИМИЯ", "ПСИ", "ГРАВИТ.",
+]
+# биты 0-4, 6, 7 (бит 5 зарезервирован под RAD в протоколе HP-маски)
+ANOM_BITS = [0, 1, 2, 3, 4, 6, 7]
+FUNC_LABELS = [
+    "HP", "RAD", "Деньги", "Броня", "Артефакты", "Аномалии", "Уровни", "Расходники",
+]
+PROT_LABELS = ["Взрыв", "Кровь", "Термо", "Электро", "Химия", "Пси", "Гравит.", "RAD"]
+TERMINAL_ROLES = ("STORE", "ATM", "QUEST", "ADMIT", "BANK")
+RECHARGE_MODES = ["РЕАКТИВНЫЙ", "АВТОНОМНЫЙ"]
+TARGET_MODES = ["ОДИН ИГРОК", "ПОДРЫВ", "ОБЛАКО"]
+
+
+class ProgrammerFrame(ttk.Frame):
+    def __init__(self, master, serial=None, on_back=None):
+        super().__init__(master)
+        self.serial = serial
+        self.on_back = on_back
+        self.chip_params = [tk.StringVar(value="0") for _ in range(16)]
+        self.anom_bits = [tk.BooleanVar(value=(i == 0)) for i in range(7)]
+        self.sz_prot = [tk.StringVar(value="0") for _ in range(8)]
+        self.pda_prot = [tk.StringVar(value="0") for _ in range(8)]
+        self.pda_func = [tk.BooleanVar(value=True) for _ in range(8)]
+        self._build()
+
+    def _build(self):
+        module_header(self, "Программатор", self.on_back)
+        ttk.Label(
+            self,
+            text="USB к CHIP_BOX или полевому устройству на столе. "
+                 "Игровой ПДА — чип EEPROM или LoRa по № регистрации.",
+            style="Dim.TLabel",
+            wraplength=820,
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.nb = nb
+
+        self.tab_chip = ttk.Frame(nb)
+        self.tab_anom = ttk.Frame(nb)
+        self.tab_sz = ttk.Frame(nb)
+        self.tab_pda = ttk.Frame(nb)
+        self.tab_term = ttk.Frame(nb)
+        nb.add(self.tab_chip, text="Чип")
+        nb.add(self.tab_anom, text="Аномалия")
+        nb.add(self.tab_sz, text="Убежище")
+        nb.add(self.tab_pda, text="ПДА (стол)")
+        nb.add(self.tab_term, text="Терминал")
+
+        self._build_chip()
+        self._build_anom()
+        self._build_sz()
+        self._build_pda()
+        self._build_term()
+
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", padx=12, pady=(0, 10))
+        ttk.Button(bar, text="Прошить", style="Accent.TButton",
+                   command=self._flash).pack(side="left")
+        ttk.Button(bar, text="Считать CONFIG_READ",
+                   command=self._read).pack(side="left", padx=8)
+        self.lbl_status = ttk.Label(bar, text="", style="Dim.TLabel")
+        self.lbl_status.pack(side="left", padx=12)
+
+    def _row(self, parent, label, var, width=12):
+        r = ttk.Frame(parent)
+        r.pack(fill="x", padx=8, pady=2)
+        ttk.Label(r, text=label, width=22).pack(side="left")
+        ttk.Entry(r, textvariable=var, width=width).pack(side="left")
+        return r
+
+    def _build_chip(self):
+        f = self.tab_chip
+        self.var_chip_type = tk.IntVar(value=0)
+        self.var_chip_sub = tk.IntVar(value=0)
+        self.var_chip_uses = tk.StringVar(value="1")
+        self.var_reg_name = tk.StringVar()
+        self.var_reg_id = tk.StringVar(value="1")
+
+        top = ttk.Frame(f)
+        top.pack(fill="x", padx=8, pady=8)
+        ttk.Label(top, text="Тип").pack(side="left")
+        self.cmb_chip_type = ttk.Combobox(
+            top, state="readonly", width=18, values=CHIP_TYPES)
+        self.cmb_chip_type.current(0)
+        self.cmb_chip_type.pack(side="left", padx=6)
+        self.cmb_chip_type.bind("<<ComboboxSelected>>", self._on_chip_type)
+        ttk.Label(top, text="Подтип").pack(side="left", padx=(12, 0))
+        self.cmb_chip_sub = ttk.Combobox(top, state="readonly", width=28)
+        self.cmb_chip_sub.pack(side="left", padx=6)
+        self._refresh_subs()
+        ttk.Label(top, text="Использований").pack(side="left", padx=(12, 0))
+        ttk.Entry(top, textvariable=self.var_chip_uses, width=6).pack(side="left", padx=4)
+
+        grid = ttk.LabelFrame(f, text="Параметры p0…p15")
+        grid.pack(fill="x", padx=8, pady=4)
+        for i in range(16):
+            cell = ttk.Frame(grid)
+            cell.grid(row=i // 8, column=i % 8, padx=4, pady=4, sticky="w")
+            ttk.Label(cell, text=f"p{i}", width=3).pack(side="left")
+            ttk.Entry(cell, textvariable=self.chip_params[i], width=6).pack(side="left")
+
+        reg = ttk.LabelFrame(f, text="Чип регистрации (админка / РЕГИСТРАЦИЯ)")
+        reg.pack(fill="x", padx=8, pady=8)
+        ttk.Label(reg, text="№ игрока (p0)").pack(side="left", padx=8)
+        ttk.Entry(reg, textvariable=self.var_reg_id, width=8).pack(side="left")
+        ttk.Label(reg, text="Имя (EEPROM @0x26)").pack(side="left", padx=8)
+        ttk.Entry(reg, textvariable=self.var_reg_name, width=24).pack(side="left")
+        ttk.Label(
+            f,
+            text="Имя не влезает в LoRa-пакет 8 байт — только на чип. "
+                 "В поле ПДА получает № по LoRa и имя с чипа.",
+            style="Dim.TLabel", wraplength=760, justify="left",
+        ).pack(anchor="w", padx=8, pady=(4, 8))
+
+    def _refresh_subs(self):
+        t = self.cmb_chip_type.current()
+        if t < 0:
+            t = 0
+        subs = CHIP_SUBTYPES[t]
+        self.cmb_chip_sub["values"] = subs
+        self.cmb_chip_sub.current(0)
+
+    def _on_chip_type(self, _evt=None):
+        self._refresh_subs()
+
+    def _build_anom(self):
+        f = self.tab_anom
+        self.var_anom_dmg = tk.StringVar(value="10")
+        self.var_anom_dmax = tk.StringVar(value="20")
+        self.var_anom_dstep = tk.StringVar(value="1")
+        self.var_anom_freq = tk.StringVar(value="60")
+        self.var_anom_erupt = tk.StringVar(value="30")
+        self.var_anom_hits = tk.StringVar(value="3")
+        self.var_anom_radius = tk.StringVar(value="5")
+        self.var_anom_rad_on = tk.BooleanVar(value=False)
+        self.var_anom_rad_dmg = tk.StringVar(value="0")
+        self.var_anom_rad_freq = tk.StringVar(value="10")
+
+        bits = ttk.LabelFrame(f, text="Типы урона HP")
+        bits.pack(fill="x", padx=8, pady=8)
+        for i, name in enumerate(ANOM_TYPES):
+            ttk.Checkbutton(bits, text=name, variable=self.anom_bits[i]).pack(
+                side="left", padx=4)
+
+        self._row(f, "Урон", self.var_anom_dmg)
+        self._row(f, "Урон макс.", self.var_anom_dmax)
+        self._row(f, "Шаг урона", self.var_anom_dstep)
+        self._row(f, "Перезарядка HP, сек", self.var_anom_freq)
+        self._row(f, "Извержение, сек", self.var_anom_erupt)
+        self._row(f, "Попадания", self.var_anom_hits)
+        self._row(f, "Радиус", self.var_anom_radius)
+
+        rec = ttk.Frame(f)
+        rec.pack(fill="x", padx=8, pady=4)
+        ttk.Label(rec, text="Перезарядка / цель", width=22).pack(side="left")
+        self.cmb_rech = ttk.Combobox(rec, state="readonly", width=16,
+                                     values=RECHARGE_MODES)
+        self.cmb_rech.current(0)
+        self.cmb_tgt = ttk.Combobox(rec, state="readonly", width=16,
+                                    values=TARGET_MODES)
+        self.cmb_tgt.current(0)
+        self.cmb_rech.pack(side="left", padx=4)
+        self.cmb_tgt.pack(side="left", padx=4)
+
+        ttk.Checkbutton(f, text="Радиация (отдельный таймер)",
+                        variable=self.var_anom_rad_on).pack(anchor="w", padx=8)
+        self._row(f, "RAD за тик", self.var_anom_rad_dmg)
+        self._row(f, "RAD интервал, сек", self.var_anom_rad_freq)
+
+    def _build_sz(self):
+        f = self.tab_sz
+        self.var_sz_regen = tk.StringVar(value="5")
+        self.var_sz_rad = tk.StringVar(value="2")
+        self.var_sz_hp_freq = tk.StringVar(value="30")
+        self.var_sz_rad_freq = tk.StringVar(value="60")
+        self.var_sz_radius = tk.StringVar(value="10")
+        self.var_sz_emission = tk.BooleanVar(value=False)
+        self._row(f, "Реген HP / мин", self.var_sz_regen)
+        self._row(f, "Интервал HP, сек", self.var_sz_hp_freq)
+        self._row(f, "Очистка RAD", self.var_sz_rad)
+        self._row(f, "Интервал RAD, сек", self.var_sz_rad_freq)
+        self._row(f, "Радиус", self.var_sz_radius)
+        ttk.Checkbutton(f, text="Защита от выброса",
+                        variable=self.var_sz_emission).pack(anchor="w", padx=8, pady=4)
+        prot = ttk.LabelFrame(f, text="Защиты %")
+        prot.pack(fill="x", padx=8, pady=8)
+        for i, name in enumerate(PROT_LABELS):
+            cell = ttk.Frame(prot)
+            cell.grid(row=i // 4, column=i % 4, padx=4, pady=4, sticky="w")
+            ttk.Label(cell, text=name, width=10).pack(side="left")
+            ttk.Entry(cell, textvariable=self.sz_prot[i], width=5).pack(side="left")
+
+    def _build_pda(self):
+        f = self.tab_pda
+        ttk.Label(
+            f,
+            text="Стендовая прошивка ПДА на столе (функции / пресет). "
+                 "Имя игрока — чип регистрации, не этот экран.",
+            style="Dim.TLabel", wraplength=760,
+        ).pack(anchor="w", padx=8, pady=8)
+        self.var_pda_mode = tk.IntVar(value=0)
+        ttk.Radiobutton(f, text="Функции (биты)", variable=self.var_pda_mode,
+                        value=0).pack(anchor="w", padx=8)
+        box = ttk.Frame(f)
+        box.pack(fill="x", padx=16, pady=4)
+        for i, lab in enumerate(FUNC_LABELS):
+            ttk.Checkbutton(box, text=lab, variable=self.pda_func[i]).grid(
+                row=i // 4, column=i % 4, sticky="w", padx=6, pady=2)
+
+        ttk.Radiobutton(f, text="Пресет данных", variable=self.var_pda_mode,
+                        value=1).pack(anchor="w", padx=8, pady=(8, 2))
+        self.var_pda_maxhp = tk.StringVar(value="1000")
+        self.var_pda_starthp = tk.StringVar(value="1000")
+        self.var_pda_maxrad = tk.StringVar(value="1000")
+        self.var_pda_money = tk.StringVar(value="1000")
+        self.var_pda_level = tk.StringVar(value="2")
+        self.var_pda_xp = tk.StringVar(value="0")
+        self._row(f, "Макс. HP", self.var_pda_maxhp)
+        self._row(f, "Старт HP", self.var_pda_starthp)
+        self._row(f, "Макс. RAD", self.var_pda_maxrad)
+        self._row(f, "Деньги", self.var_pda_money)
+        self._row(f, "Уровень", self.var_pda_level)
+        self._row(f, "XP", self.var_pda_xp)
+        prot = ttk.LabelFrame(f, text="Базовые защиты %")
+        prot.pack(fill="x", padx=8, pady=8)
+        for i, name in enumerate(PROT_LABELS):
+            cell = ttk.Frame(prot)
+            cell.grid(row=i // 4, column=i % 4, padx=4, pady=4, sticky="w")
+            ttk.Label(cell, text=name, width=10).pack(side="left")
+            ttk.Entry(cell, textvariable=self.pda_prot[i], width=5).pack(side="left")
+
+    def _build_term(self):
+        f = self.tab_term
+        ttk.Label(f, text="Роль универсального терминала (NVS на устройстве).",
+                  style="Dim.TLabel").pack(anchor="w", padx=8, pady=12)
+        self.cmb_role = ttk.Combobox(f, state="readonly", width=16,
+                                     values=TERMINAL_ROLES)
+        self.cmb_role.current(0)
+        self.cmb_role.pack(anchor="w", padx=8)
+
+    def _i(self, var, default=0):
+        try:
+            return int(var.get())
+        except (TypeError, ValueError, tk.TclError):
+            return default
+
+    def _chip_dict(self):
+        t = max(0, self.cmb_chip_type.current())
+        st = max(0, self.cmb_chip_sub.current())
+        params = [self._i(v) for v in self.chip_params]
+        if t == 3 and st == 7:
+            params[0] = self._i(self.var_reg_id, 1)
+        return {
+            "chip_type": t,
+            "chip_sub": st,
+            "uses": max(0, min(255, self._i(self.var_chip_uses, 1))),
+            "params": params,
+            "reg_name": self.var_reg_name.get().strip(),
+        }
+
+    def _anom_dict(self):
+        mask = 0
+        for i, bit in enumerate(ANOM_BITS):
+            if self.anom_bits[i].get():
+                mask |= 1 << bit
+        if mask == 0:
+            mask = 1
+        return {
+            "anom_dmg_mask": mask,
+            "anom_dmg": self._i(self.var_anom_dmg, 10),
+            "anom_dmg_max": self._i(self.var_anom_dmax, 20),
+            "anom_dmg_step": self._i(self.var_anom_dstep, 1),
+            "anom_freq": self._i(self.var_anom_freq, 60),
+            "anom_erupt": self._i(self.var_anom_erupt, 30),
+            "anom_hits": self._i(self.var_anom_hits, 3),
+            "anom_radius": self._i(self.var_anom_radius, 5),
+            "anom_rad_on": bool(self.var_anom_rad_on.get()),
+            "anom_rad_dmg": self._i(self.var_anom_rad_dmg),
+            "anom_rad_freq": self._i(self.var_anom_rad_freq, 10),
+            "anom_recharge": max(0, self.cmb_rech.current()),
+            "anom_target": max(0, self.cmb_tgt.current()),
+        }
+
+    def _sz_dict(self):
+        return {
+            "sz_regen": self._i(self.var_sz_regen, 5),
+            "sz_rad": self._i(self.var_sz_rad, 2),
+            "sz_hp_freq": self._i(self.var_sz_hp_freq, 30),
+            "sz_rad_freq": self._i(self.var_sz_rad_freq, 60),
+            "sz_radius": self._i(self.var_sz_radius, 10),
+            "sz_emission": bool(self.var_sz_emission.get()),
+            "sz_prot": [self._i(v) for v in self.sz_prot],
+        }
+
+    def _pda_dict(self):
+        flags = 0
+        for i, v in enumerate(self.pda_func):
+            if v.get():
+                flags |= 1 << i
+        return {
+            "pda_mode": self.var_pda_mode.get(),
+            "pda_func_flags": flags,
+            "pda_maxhp": self._i(self.var_pda_maxhp, 1000),
+            "pda_starthp": self._i(self.var_pda_starthp, 1000),
+            "pda_maxrad": self._i(self.var_pda_maxrad, 1000),
+            "pda_money": self._i(self.var_pda_money, 1000),
+            "pda_level": self._i(self.var_pda_level, 2),
+            "pda_xp": self._i(self.var_pda_xp),
+            "pda_base_prot": [self._i(v) for v in self.pda_prot],
+        }
+
+    def _flash(self):
+        if not self.serial:
+            messagebox.showwarning("Программатор", "Serial недоступен", parent=self)
+            return
+        tab = self.nb.index(self.nb.select())
+        if tab == 4:
+            role = self.cmb_role.get() or "STORE"
+            ok, resp = self.serial.set_terminal_role(role)
+            self._done(ok, resp)
+            return
+        kind = ("CHIP", "ANOMALY", "SAFE_ZONE", "PDA")[tab]
+        data = (self._chip_dict, self._anom_dict, self._sz_dict, self._pda_dict)[tab]()
+        cfg = build_config_for_device(kind, data)
+        ok, resp = self.serial.flash_config(cfg)
+        self._done(ok, resp)
+
+    def _read(self):
+        if not self.serial:
+            return
+        snap, msg = self.serial.read_config()
+        if snap is None:
+            messagebox.showerror("Программатор", str(msg), parent=self)
+            return
+        messagebox.showinfo("CONFIG_READ", str(snap), parent=self)
+
+    def _done(self, ok, resp):
+        self.lbl_status.configure(text=("OK  " if ok else "Ошибка  ") + str(resp or ""))
+        if ok:
+            messagebox.showinfo("Программатор", str(resp), parent=self)
+        else:
+            messagebox.showwarning("Программатор", str(resp), parent=self)

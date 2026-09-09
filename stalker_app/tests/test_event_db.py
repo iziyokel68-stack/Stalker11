@@ -89,6 +89,26 @@ class EventDBTests(unittest.TestCase):
             rows = list(csv.reader(f))
         self.assertEqual(rows[1][1], "Иван")
 
+    def test_map_image_and_beacons(self):
+        src = os.path.join(self.tmp.name, "shot.png")
+        with open(src, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n")
+        dest = self.db.set_map_image(self.event_id, src)
+        self.assertTrue(os.path.isfile(dest))
+        meta = self.db.get_map_meta(self.event_id)
+        self.assertEqual(meta["image_path"], dest)
+        bid = self.db.add_beacon(
+            self.event_id, "Вышка", "uwb", 12.5, 80.0, note="известная точка"
+        )
+        beacons = self.db.list_beacons(self.event_id)
+        self.assertEqual(len(beacons), 1)
+        self.assertEqual(beacons[0].beacon_id, bid)
+        self.assertEqual(beacons[0].kind, "uwb")
+        self.db.update_beacon(bid, kind="bogus", name="КПП-1")
+        self.assertEqual(self.db.list_beacons(self.event_id)[0].kind, "other")
+        self.db.delete_beacon(bid)
+        self.assertEqual(self.db.list_beacons(self.event_id), [])
+
     def test_import_export_db_copy(self):
         self.db.add_player(self.event_id, "Иван")
         dest = os.path.join(self.tmp.name, "copy.db")

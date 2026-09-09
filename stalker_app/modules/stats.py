@@ -2,7 +2,6 @@
 STALKER App — модуль «Сбор статистики» (docs/PROGRESSION.txt §10.1, §10.3 Фаза 3)
 """
 
-import json
 import time as _time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -64,12 +63,10 @@ class StatsFrame(ttk.Frame):
 
         ttk.Button(mid, text="Записать снимок", command=self._record_stat).pack(
             fill="x", padx=8, pady=(10, 4))
-        ttk.Button(mid, text="Снять с ПДА (USB CONFIG_READ)",
-                   command=self._pull_pda).pack(fill="x", padx=8, pady=2)
         ttk.Label(
             mid,
-            text="Автосъём с админ-чипа «Сохранение» — после боевой прошивки.\n"
-                 "USB CONFIG_READ заполняет поля, если ПДА на кабеле.",
+            text="Снимок с поля — админ-чип «Сохранение» (EEPROM),\n"
+                 "не USB-кабель к ПДА игрока. Пока ввод вручную.",
             style="Dim.TLabel", justify="left",
         ).pack(anchor="w", padx=8, pady=(8, 4))
 
@@ -140,26 +137,6 @@ class StatsFrame(ttk.Frame):
         )
         self._refresh_history()
         messagebox.showinfo("Статистика", "Снимок записан", parent=self)
-
-    def _pull_pda(self):
-        if self.serial is None:
-            messagebox.showwarning("Статистика", "Serial недоступен", parent=self)
-            return
-        snap, msg = self.serial.read_snapshot()
-        if not snap:
-            messagebox.showerror("Статистика", f"Не удалось считать ПДА: {msg}",
-                                 parent=self)
-            return
-        if "lvl" in snap:
-            self.var_level.set(str(snap["lvl"]))
-        if "xp" in snap:
-            self.var_xp.set(str(snap["xp"]))
-        if "money" in snap:
-            self.var_money.set(str(snap["money"]))
-        if "deaths" in snap:
-            self.var_deaths.set(str(snap["deaths"]))
-        blob = json.dumps(snap, ensure_ascii=False, default=str)
-        self._record_stat(snapshot_json=blob)
 
     def _refresh_history(self):
         for i in self.tree.get_children():

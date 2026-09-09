@@ -3,13 +3,19 @@ USB Serial к устройствам STALKER (ESP32).
 ================================================
 Handshake: PC → STALKER_WHO  /  ESP → STALKER:TYPE:ver[,role=…]
 
-Эталон команд ПДА (USB, не LoRa):
-  CONFIG:REGISTER:name=…,callsign=…,group=…
-  CONFIG:ADMIT / CONFIG:REVIVE / CONFIG:RANK_CONFIRM
-  CONFIG:BROADCAST:<текст>
-  CONFIG:EMISSION:timer=N,duration=N
-  CONFIG:RADIO:track=N,vol=N
-  CONFIG:UID / CONFIG_READ / CONFIG:FUNC: / CONFIG:PRESET:
+USB — только к одному устройству на ПК мастера (CHIP_BOX, полевое устройство
+на столе, позже Мастер-Пульт / телефон). Взаимодействие с ПДА игрока:
+  • LoRa по номеру регистрации (player_id, 0 = все) — LORA_TX:…
+  • общий EEPROM-чип через CHIP_BOX — CONFIG_WRITE / TXN_*
+
+Команды:
+  CONFIG_WRITE:type=…   прошивка чипа / аномалии / убежища
+  CONFIG:FUNC: / CONFIG:PRESET:   стендовая прошивка ПДА
+  CONFIG:EMISSION:timer_min=…,duration_min=…
+  CONFIG:RADIO:track=N            громкость отдельно
+  CONFIG:VOLUME:level=0..30       DFPlayer (радио + уведомления)
+  LORA_TX:to=N,msg=…,v1=…,v2=…[,text=…]
+  name= в CONFIG_WRITE → EEPROM @0x26 (чип регистрации)
 
 Модуль без pygame — его импортируют и программатор, и приложение мастера.
 """
@@ -388,8 +394,15 @@ class SerialLink:
         return (180, 80, 80)
 
 
+def emission_seconds(timer_min: int, duration_min: int):
+    """Минуты UI → секунды int16 для LoRa Msg.EMISSION (val1/val2)."""
+    timer = max(0, min(32767, int(timer_min) * 60))
+    duration = max(0, min(32767, int(duration_min) * 60))
+    return timer, duration
+
+
 def build_register_cmd(name: str, callsign: str = "", group: str = "") -> str:
-    """CONFIG:REGISTER:name=… — канон §9.6 / §10.2."""
+    """Стенд: CONFIG:REGISTER. Канон поля — EEPROM-чип регистрации / LoRa №."""
     parts = [f"name={_sanitize_field(name)}"]
     if callsign.strip():
         parts.append(f"callsign={_sanitize_field(callsign)}")
@@ -402,12 +415,45 @@ def build_broadcast_cmd(text: str) -> str:
     return "CONFIG:BROADCAST:" + (text or "").replace("\n", " ").strip()[:80]
 
 
-def build_emission_cmd(timer_sec: int, duration_sec: int) -> str:
-    return f"CONFIG:EMISSION:timer={int(timer_sec)},duration={int(duration_sec)}"
+def build_emission_cmd(timer_min: int, duration_min: int) -> str:
+    """Выброс: минуты в UI, на провод — timer_min / duration_min."""
+    return (
+        f"CONFIG:EMISSION:timer_min={int(timer_min)},"
+        f"duration_min={int(duration_min)}"
+    )
 
 
 def build_radio_cmd(track: int, volume: int = 0) -> str:
-    return f"CONFIG:RADIO:track={int(track)},vol={int(volume)}"
+    """Радио: только трек. Громкость — CONFIG:VOLUME (DFPlayer 0–30)."""
+    return f"CONFIG:RADIO:track={int(track)}"
+
+
+def build_volume_cmd(level: int) -> str:
+    level = max(0, min(30, int(level)))
+    return f"CONFIG:VOLUME:level={level}"
+
+
+def build_lora_cmd(player_id: int, msg: str, val1: int = 0, val2: int = 0,
+                   text: str = "") -> str:
+    """Команда Мастер-Пульту: LoRa на номер регистрации (0 = все)."""
+    cmd = f"LORA_TX:to={int(player_id)},msg={msg},v1={int(val1)},v2={int(val2)}"
+    if text:
+        cmd += ",text=" + text.replace("\n", " ").replace(",", " ")[:48]
+    return cmd
+
+
+def build_register_chip(player_id: int, name: str) -> str:
+    """Админ-чип регистрации (type=3 sub=7), имя в расширении EEPROM @0x26."""
+    nm = _sanitize_field(name)
+    return f"type=3,sub=7,uses=1,p0={int(player_id)},name={nm}"
+
+
+def build_admit_chip() -> str:
+    return "type=3,sub=6,uses=1," + ",".join(f"p{i}=0" for i in range(16))
+
+
+def build_revive_chip() -> str:
+    return "type=3,sub=0,uses=1," + ",".join(f"p{i}=0" for i in range(16))
 
 
 def _sanitize_field(value: str) -> str:

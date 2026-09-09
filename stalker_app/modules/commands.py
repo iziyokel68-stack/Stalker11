@@ -1,9 +1,9 @@
-"""Команды мастера на подключённый ПДА: допуск, воскрешение, чтение снимка."""
+"""Команды мастера: LoRa по № регистрации или EEPROM-чип (не USB к ПДА)."""
 
-import json
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from shared.master_channel import player_id_from_target
 from theme import module_header
 
 
@@ -23,62 +23,95 @@ class CommandsFrame(ttk.Frame):
 
         ttk.Label(
             body,
-            text="USB Serial к ПДА. LoRa-рассылка KILL/REVIVE/WIPE на поле — Мастер-Пульт (фаза 5).",
-            style="Dim.TLabel",
+            text="ПДА игрока: LoRa на № регистрации или чип в CHIP_BOX. "
+                 "USB — одно устройство мастера, не кабель к каждому ПДА.",
+            style="Dim.TLabel", wraplength=820,
         ).pack(anchor="w", pady=(0, 10))
 
         row = ttk.Frame(body)
         row.pack(fill="x", pady=4)
-        ttk.Button(row, text="Допуск (CONFIG:ADMIT)", style="Accent.TButton",
-                   command=self._admit).pack(side="left", padx=4)
-        ttk.Button(row, text="Воскрешение (CONFIG:REVIVE)",
-                   command=self._revive).pack(side="left", padx=4)
-        ttk.Button(row, text="Считать UID", command=self._uid).pack(side="left", padx=4)
-        ttk.Button(row, text="Снимок CONFIG_READ", command=self._snap).pack(
-            side="left", padx=4)
+        ttk.Label(row, text="Кому").pack(side="left")
+        self.var_target = tk.StringVar(value="all")
+        self.cmb_target = ttk.Combobox(row, textvariable=self.var_target, width=28)
+        self.cmb_target.pack(side="left", padx=8)
+        self._refresh_targets()
 
-        self.out = tk.Text(body, height=18, bg="#252732", fg="#c8f0d0",
-                           insertbackground="#e6e6ea", borderwidth=0, font=("DejaVu Sans Mono", 10))
+        row2 = ttk.Frame(body)
+        row2.pack(fill="x", pady=8)
+        ttk.Button(row2, text="Допуск LoRa", style="Accent.TButton",
+                   command=self._admit_lora).pack(side="left", padx=4)
+        ttk.Button(row2, text="Воскрешение LoRa",
+                   command=self._revive_lora).pack(side="left", padx=4)
+        ttk.Button(row2, text="KILL LoRa", style="Danger.TButton",
+                   command=self._kill_lora).pack(side="left", padx=4)
+
+        row3 = ttk.Frame(body)
+        row3.pack(fill="x", pady=4)
+        ttk.Button(row3, text="Прошить чип допуска",
+                   command=self._chip_admit).pack(side="left", padx=4)
+        ttk.Button(row3, text="Прошить чип воскрешения",
+                   command=self._chip_revive).pack(side="left", padx=4)
+
+        self.out = tk.Text(body, height=16, bg="#252732", fg="#c8f0d0",
+                           insertbackground="#e6e6ea", borderwidth=0,
+                           font=("DejaVu Sans Mono", 10))
         self.out.pack(fill="both", expand=True, pady=(10, 0))
 
         ttk.Label(
             body,
-            text="ADMIT ≠ REVIVE. Допуск — каждое включение, только главный мастер.\n"
+            text="ADMIT ≠ REVIVE. Допуск — каждое включение, главный мастер.\n"
                  "Воскрешение — при «СВЯЗЬ ПОТЕРЯНА», не для зомби.",
             style="Dim.TLabel", justify="left",
         ).pack(anchor="w", pady=(8, 0))
+
+    def _refresh_targets(self):
+        values = ["all"]
+        for p in self.db.list_players(self.event_id):
+            values.append(f"player:{p.player_id}:{p.name}")
+        self.cmb_target["values"] = values
 
     def _log(self, text):
         self.out.insert("end", text + "\n")
         self.out.see("end")
 
-    def _admit(self):
+    def _pid(self):
+        return player_id_from_target(self.var_target.get())
+
+    def _admit_lora(self):
         if not self.serial:
             return
-        ok, resp = self.serial.admit()
-        self._log(("OK " if ok else "FAIL ") + str(resp))
+        pid = self._pid()
+        ok, resp = self.serial.admit_lora(pid)
+        self._log(("OK " if ok else "FAIL ") + f"ADMIT №{pid}  {resp}")
         if not ok:
             messagebox.showerror("Допуск", str(resp), parent=self)
 
-    def _revive(self):
+    def _revive_lora(self):
         if not self.serial:
             return
-        ok, resp = self.serial.revive()
-        self._log(("OK " if ok else "FAIL ") + str(resp))
+        pid = self._pid()
+        ok, resp = self.serial.revive_lora(pid)
+        self._log(("OK " if ok else "FAIL ") + f"REVIVE №{pid}  {resp}")
         if not ok:
             messagebox.showerror("Воскрешение", str(resp), parent=self)
 
-    def _uid(self):
+    def _kill_lora(self):
         if not self.serial:
             return
-        uid, msg = self.serial.read_uid()
-        self._log(f"UID: {uid or '—'}  ({msg})")
+        pid = self._pid()
+        ok, resp = self.serial.kill_lora(pid)
+        self._log(("OK " if ok else "FAIL ") + f"KILL №{pid}  {resp}")
+        if not ok:
+            messagebox.showerror("KILL", str(resp), parent=self)
 
-    def _snap(self):
+    def _chip_admit(self):
         if not self.serial:
             return
-        snap, msg = self.serial.read_snapshot()
-        if not snap:
-            self._log("FAIL " + str(msg))
+        ok, resp = self.serial.write_admit_chip()
+        self._log(("OK " if ok else "FAIL ") + "CHIP ADMIT  " + str(resp))
+
+    def _chip_revive(self):
+        if not self.serial:
             return
-        self._log(json.dumps(snap, ensure_ascii=False, indent=2, default=str))
+        ok, resp = self.serial.write_revive_chip()
+        self._log(("OK " if ok else "FAIL ") + "CHIP REVIVE  " + str(resp))

@@ -4,6 +4,27 @@
 
 ---
 
+## Программа мастера — внутри окна, LoRa/EEPROM, карта
+*Дата: 9 сентября 2026*
+
+### Суть
+
+Пять правок консоли мастера:
+
+1. Программатор — Tk-фрейм в том же окне (`modules/programmer.py`), не pygame-subprocess.
+2. Выброс в UI — **минуты** (`timer_min` / `duration_min`; в LoRa-пакете по-прежнему секунды int16).
+3. Громкость DFPlayer 0–30 общая для радио и уведомлений (`CONFIG:VOLUME` / LoRa VOLUME). Радио шлёт только трек. Клавиша SND — питание, не уровень.
+4. Мастер ↔ ПДА: только LoRa по № регистрации или общий EEPROM + одно USB-устройство на ПК/телефоне мастера. Не кабель к каждому ПДА. Имя — чип `type=3 sub=7` @0x26.
+5. Карта: скриншот-подложка и маяки с известными координатами (`map_meta`, `map_beacons`).
+
+CHIP_BOX на `LORA_TX` отвечает `ERROR:NO_LORA` (нужен Мастер-Пульт).
+
+### Файлы
+
+`stalker_app/` · `programmat_pc/serial_link.py` · `programmat_pc/config_builder.py` · `proshivki/Pda/V1/PDA_ESP32/PDA_ESP32.ino` · `proshivki/Cip_Programmer/Chip_Programmer_ESP32.ino`
+
+---
+
 ## Программа мастера — консоль STALKER App
 *Дата: 9 сентября 2026*
 

@@ -24,7 +24,7 @@ from modules.broadcast import BroadcastFrame
 from modules.quests import QuestsFrame
 from modules.commands import CommandsFrame
 from modules.mapview import MapFrame
-from modules import programmer_launcher
+from modules.programmer import ProgrammerFrame
 from shared.serial_session import SerialSession
 from theme import apply_theme, BG
 
@@ -63,7 +63,7 @@ class StalkerApp(tk.Tk):
         self._build_chrome()
         self._pick_or_create_event()
         self.show_dashboard()
-        self.after(800, self._poll_programmer)
+        self.after(800, self._poll_ports)
 
     def _build_chrome(self):
         root = ttk.Frame(self)
@@ -144,7 +144,7 @@ class StalkerApp(tk.Tk):
         dispatch = {
             "dashboard": self.show_dashboard,
             "registration": self.show_registration,
-            "programmer": self.launch_programmer,
+            "programmer": self.show_programmer,
             "broadcast": self.show_broadcast,
             "quests": self.show_quests,
             "stats": self.show_stats,
@@ -254,7 +254,7 @@ class StalkerApp(tk.Tk):
                 "registration": self.show_registration,
                 "broadcast": self.show_broadcast,
                 "quests": self.show_quests,
-                "programmer": self.launch_programmer,
+                "programmer": self.show_programmer,
                 "stats": self.show_stats,
                 "commands": self.show_commands,
             },
@@ -308,22 +308,21 @@ class StalkerApp(tk.Tk):
         self._current = "map"
         self._highlight_nav("map")
         self._clear_container()
-        MapFrame(self.container, on_back=self.show_dashboard).pack(
-            fill="both", expand=True)
+        MapFrame(
+            self.container, self.db, self.event_id, on_back=self.show_dashboard,
+        ).pack(fill="both", expand=True)
 
-    def launch_programmer(self):
+    def show_programmer(self):
+        self._current = "programmer"
         self._highlight_nav("programmer")
-        ok, msg = programmer_launcher.launch_programmer(self.serial)
-        self._update_serial_label()
-        if ok:
-            messagebox.showinfo("Программатор", msg, parent=self)
-        else:
-            messagebox.showwarning("Программатор", msg, parent=self)
+        self._clear_container()
+        ProgrammerFrame(
+            self.container, serial=self.serial, on_back=self.show_dashboard,
+        ).pack(fill="both", expand=True)
 
-    def _poll_programmer(self):
-        programmer_launcher.poll_programmer(self.serial)
+    def _poll_ports(self):
         self._refresh_ports()
-        self.after(1000, self._poll_programmer)
+        self.after(1000, self._poll_ports)
 
     def destroy(self):
         if self.db:

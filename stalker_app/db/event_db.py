@@ -80,11 +80,28 @@ CREATE TABLE IF NOT EXISTS quests (
     hidden       INTEGER NOT NULL DEFAULT 0,
     created_at   REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS map_meta (
+    event_id    TEXT PRIMARY KEY REFERENCES events(event_id),
+    image_path  TEXT,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS map_beacons (
+    beacon_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    TEXT NOT NULL REFERENCES events(event_id),
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    x_pct       REAL NOT NULL,
+    y_pct       REAL NOT NULL,
+    note        TEXT
+);
 """
 
 PLAYER_STATUSES = ("new", "registered", "admitted")
 BROADCAST_KINDS = ("info", "warning", "emission", "radio")
 BROADCAST_STATUSES = ("queued", "sent", "failed")
+BEACON_KINDS = ("uwb", "shelter", "anomaly", "checkpoint", "other")
 
 
 def default_db_path(event_id: str, base_dir: Optional[str] = None) -> str:
@@ -160,6 +177,17 @@ class Quest:
     reward_rub: int
     hidden: int
     created_at: float
+
+
+@dataclass
+class MapBeacon:
+    beacon_id: int
+    event_id: str
+    name: str
+    kind: str
+    x_pct: float
+    y_pct: float
+    note: Optional[str]
 
 
 def _row_to_player(r) -> Player:
@@ -498,6 +526,80 @@ class EventDB:
             "SELECT * FROM quests WHERE quest_id=?", (quest_id,)
         ).fetchone()
         return Quest(**{k: r[k] for k in r.keys()}) if r else None
+
+    # --- map ---------------------------------------------------------------
+
+    def get_map_meta(self, event_id: str):
+        return self.conn.execute(
+            "SELECT * FROM map_meta WHERE event_id=?", (event_id,)
+        ).fetchone()
+
+    def set_map_image(self, event_id: str, src_path: str) -> str:
+        """Скопировать скриншот рядом с .db и запомнить путь."""
+        dest_dir = os.path.join(os.path.dirname(self.path), f"map_{event_id}")
+        os.makedirs(dest_dir, exist_ok=True)
+        ext = os.path.splitext(src_path)[1].lower() or ".png"
+        if ext not in (".png", ".gif", ".jpg", ".jpeg", ".webp"):
+            ext = ".png"
+        dest = os.path.join(dest_dir, "background" + ext)
+        shutil.copy2(src_path, dest)
+        self.conn.execute(
+            "INSERT INTO map_meta(event_id, image_path, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(event_id) DO UPDATE SET image_path=excluded.image_path, "
+            "updated_at=excluded.updated_at",
+            (event_id, dest, time.time()),
+        )
+        self.conn.commit()
+        return dest
+
+    def clear_map_image(self, event_id: str):
+        self.conn.execute(
+            "INSERT INTO map_meta(event_id, image_path, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(event_id) DO UPDATE SET image_path=NULL, "
+            "updated_at=excluded.updated_at",
+            (event_id, None, time.time()),
+        )
+        self.conn.commit()
+
+    def add_beacon(self, event_id: str, name: str, kind: str,
+                   x_pct: float, y_pct: float, note: str = "") -> int:
+        kind = kind if kind in BEACON_KINDS else "other"
+        x_pct = max(0.0, min(100.0, float(x_pct)))
+        y_pct = max(0.0, min(100.0, float(y_pct)))
+        cur = self.conn.execute(
+            "INSERT INTO map_beacons(event_id, name, kind, x_pct, y_pct, note) "
+            "VALUES (?,?,?,?,?,?)",
+            (event_id, name.strip() or "маяк", kind, x_pct, y_pct,
+             (note or "").strip()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_beacon(self, beacon_id: int, **fields):
+        allowed = {"name", "kind", "x_pct", "y_pct", "note"}
+        cols = [k for k in fields if k in allowed]
+        if not cols:
+            return
+        if "kind" in fields and fields["kind"] not in BEACON_KINDS:
+            fields = dict(fields)
+            fields["kind"] = "other"
+        set_clause = ", ".join(f"{c}=?" for c in cols)
+        values = [fields[c] for c in cols] + [beacon_id]
+        self.conn.execute(
+            f"UPDATE map_beacons SET {set_clause} WHERE beacon_id=?", values
+        )
+        self.conn.commit()
+
+    def delete_beacon(self, beacon_id: int):
+        self.conn.execute("DELETE FROM map_beacons WHERE beacon_id=?", (beacon_id,))
+        self.conn.commit()
+
+    def list_beacons(self, event_id: str):
+        rows = self.conn.execute(
+            "SELECT * FROM map_beacons WHERE event_id=? ORDER BY beacon_id",
+            (event_id,),
+        ).fetchall()
+        return [MapBeacon(**{k: r[k] for k in r.keys()}) for r in rows]
 
     # --- export / import ---------------------------------------------------
 
