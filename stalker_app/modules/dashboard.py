@@ -54,9 +54,9 @@ class DashboardFrame(ttk.Frame):
         self.cards = {}
         for i, (key, label) in enumerate((
             ("total", "Игроков"),
-            ("registered", "Зарегистрировано"),
+            ("new", "Новых"),
+            ("registered", "На мосту"),
             ("admitted", "Допущено"),
-            ("bound", "ПДА привязано"),
         )):
             card = ttk.LabelFrame(stats, text=label)
             card.grid(row=0, column=i, padx=4, sticky="nsew")

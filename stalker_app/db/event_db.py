@@ -418,6 +418,7 @@ class EventDB:
             "registered": registered,
             "admitted": admitted,
             "bound": bound,
+            "new": max(0, total - registered),
         }
 
     def get_player(self, player_id: int):
