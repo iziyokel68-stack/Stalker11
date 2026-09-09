@@ -341,6 +341,7 @@ void setup() {
     Serial.print("BEACON:id=");
     Serial.println(fieldId);
     printWho();
+    Serial.println("INFO: этот id — номер железки для карты мастера");
     Serial.println("MODE: " + String(cfgCat == 0 ? "ANOMALY" : "SAFEZONE"));
     Serial.println("CONFIG:" + buildConfigStr());
 

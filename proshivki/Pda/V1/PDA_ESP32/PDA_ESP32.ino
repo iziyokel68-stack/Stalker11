@@ -9,12 +9,13 @@
  * ╠══════════════════════════════════════════════════╣
  * ║ Миграция v2.0→v2.1 (аппаратная валидация):       ║
  * ║ • M024 320×240 — tft_panel.h MADCTL 0x88 (v2.8)  ║
- * ║ • 4 кнопки DN/RT/OK/ESC (G4–G7); громкость — долгое RT/DN ║
- * ║ • G47/G48 не используются                                    ║
- * ║ • LED G15/G16, вибро G21, DFPlayer Serial2       ║
- * ║ • BU03 Serial1 G1/G2, BU03_PWR G42               ║
- * ║ • LoRa SPI G39/G40/G41, RST=G12 shared с TFT     ║
- * ║ • Ключи PWR/SND/VIB/BL — разрыв питания (не GPIO)║
+ * ║ • 4 кнопки DN/RT/OK/ESC (G4–G7)                      ║
+ * ║ • G47/G48 не используются; ключа SND нет             ║
+ * ║ • Громкость — страница «НАСТРОЙКИ» (не жесты)        ║
+ * ║ • LED G15/G16, вибро G21, DFPlayer Serial2           ║
+ * ║ • BU03 Serial1 G1/G2, BU03_PWR G42                   ║
+ * ║ • LoRa SPI G39/G40/G41, RST=G12 shared с TFT         ║
+ * ║ • Питание ПДА — ключ PWR; DFPlayer вместе с ПДА      ║
  * ╠══════════════════════════════════════════════════╣
  * ║ UI (целевая модель batch 2, июнь 2026):          ║
  * ║ • 3 top-level страницы: 0 Главная, 1 Инвентарь,  ║
@@ -1327,6 +1328,7 @@ Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 U8G2_FOR_ADAFRUIT_GFX u8g2;
 
 int8_t currentPage = 0;
+#define NUM_PAGES 6
 int8_t selectedRow = 0;
 bool needFullRedraw = true;
 
@@ -1559,8 +1561,8 @@ void printRusStr(int x, int y, const String &text, uint16_t color) {
 }
 
 void drawPageIndicator() {
-  for (int i = 0; i < 5; i++) {
-    int x = SCR_W - 62 + i * 12;
+  for (int i = 0; i < NUM_PAGES; i++) {
+    int x = SCR_W - 74 + i * 12;
     int y = SCR_H - 12;
     if (i == currentPage)
       tft.fillCircle(x, y, 4, C_BORDER);
@@ -1714,7 +1716,7 @@ void drawPage3() {
   tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
 
   char pageLbl[16];
-  snprintf(pageLbl, sizeof(pageLbl), "стр. %d/5", currentPage + 1);
+  snprintf(pageLbl, sizeof(pageLbl), "стр. %d/%d", currentPage + 1, NUM_PAGES);
   printRus(248, 8, pageLbl, C_DGRAY);
 
   tft.fillRect(8, 36, SCR_W - 16, 58, C_BLACK);
@@ -1766,6 +1768,28 @@ void drawPage4() {
   drawPageIndicator();
 }
 
+// ─── СТРАНИЦА 5: НАСТРОЙКИ (громкость) ───
+void drawPage5() {
+  printRus(108, 8, "НАСТРОЙКИ", C_BORDER);
+  tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
+
+  printRus(12, 48, "ГРОМКОСТЬ", C_WHITE);
+  drawBar(12, 72, SCR_W - 24, 22, dfVolume, 30, C_GREEN, C_YELLOW, C_ORANGE);
+  char volBuf[16];
+  snprintf(volBuf, sizeof(volBuf), "%u / 30", (unsigned)dfVolume);
+  printRus(12, 104, volBuf, C_YELLOW);
+  if (dfVolume == 0)
+    printRus(12, 128, "0 = БЕЗ ЗВУКА", C_ORANGE);
+  else
+    printRus(12, 128, "ЗВУК ВКЛ", C_GREEN);
+
+  printRus(12, 168, "ВНИЗ — тише", C_LGRAY);
+  printRus(12, 188, "ОК — громче", C_LGRAY);
+  printRus(12, 208, "ВПРАВО / ESC — страницы", C_DGRAY);
+
+  drawPageIndicator();
+}
+
 void drawScreen() {
   if (needFullRedraw) {
     tft.fillScreen(C_BLACK);
@@ -1809,6 +1833,9 @@ void drawScreen() {
   case 4:
     drawPage4();
     break;
+  case 5:
+    drawPage5();
+    break;
   }
 
   tft.drawFastHLine(8, EVT_Y - 6, SCR_W - 16, C_BORDER);
@@ -1836,10 +1863,7 @@ bool btnState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
 bool lastFlickerableState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
 uint32_t lastDebounceTime[NUM_BTNS] = {0, 0, 0, 0};
 bool lastBtnState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
-uint32_t btnDownMs[NUM_BTNS] = {0};
-bool btnLongFired[NUM_BTNS] = {false};
 #define DEBOUNCE_DELAY 50
-#define LONG_PRESS_MS 650
 
 bool getDebouncedState(int pin, int idx) {
   bool reading = digitalRead(pin);
@@ -1878,39 +1902,26 @@ void adjustVolume(int delta) {
 }
 
 void handleButtons() {
-  // Короткое DN/RT — навигация. Долгое DN/RT — громкость (пины 47/48 не используются).
-  for (int idx = 0; idx < NUM_BTNS; idx++) {
-    bool state = getDebouncedState(BTN_PINS[idx], idx);
-    bool was = lastBtnState[idx];
-    if (state == LOW && was == HIGH) {
-      btnDownMs[idx] = millis();
-      btnLongFired[idx] = false;
-    }
-    if (state == LOW && !btnLongFired[idx] &&
-        (millis() - btnDownMs[idx]) >= LONG_PRESS_MS) {
-      btnLongFired[idx] = true;
-      if (idx == 0)
-        adjustVolume(-2);
-      else if (idx == 1)
-        adjustVolume(2);
-    }
-    bool released = (state == HIGH && was == LOW);
-    lastBtnState[idx] = state;
-    if (!released || btnLongFired[idx])
-      continue;
-    if (idx == 0) {
-      if (currentPage == 1)
-        selectedRow = (selectedRow + 1) % 4;
-      needFullRedraw = true;
-    } else if (idx == 1) {
-      currentPage = (currentPage + 1) % 5;
-      needFullRedraw = true;
-    } else if (idx == 2) {
-      needFullRedraw = true;
-    } else if (idx == 3) {
-      currentPage = (currentPage + 4) % 5;
-      needFullRedraw = true;
-    }
+  // DN — вниз / громкость− в настройках. RT/ESC — страницы. OK — громкость+ в настройках.
+  if (btnPressed(0)) {
+    if (currentPage == 1)
+      selectedRow = (selectedRow + 1) % 4;
+    else if (currentPage == 5)
+      adjustVolume(-2);
+    needFullRedraw = true;
+  }
+  if (btnPressed(1)) {
+    currentPage = (currentPage + 1) % NUM_PAGES;
+    needFullRedraw = true;
+  }
+  if (btnPressed(2)) {
+    if (currentPage == 5)
+      adjustVolume(2);
+    needFullRedraw = true;
+  }
+  if (btnPressed(3)) {
+    currentPage = (currentPage + NUM_PAGES - 1) % NUM_PAGES;
+    needFullRedraw = true;
   }
 }
 

@@ -59,8 +59,10 @@ class MapFrame(ttk.Frame):
         self._img_box = (0, 0, 1, 1)  # x0,y0,w,h on canvas
         self._place_kind = tk.StringVar(value="uwb")
         self._usb_device_id = tk.StringVar()
+        self._usb_hint = tk.StringVar()
         self._build()
         self.after(80, self.redraw)
+        self.after(400, self._poll_usb_id)
 
     def _build(self):
         module_header(self, "Карта локации", self.on_back)
@@ -78,14 +80,11 @@ class MapFrame(ttk.Frame):
             tools, textvariable=self._place_kind, state="readonly", width=14,
             values=list(KIND_LABEL.keys()),
         ).pack(side="left")
-        ttk.Button(tools, text="Считать ID с USB",
-                   command=self._read_usb_id).pack(side="left", padx=8)
-        ttk.Label(tools, textvariable=self._usb_device_id, style="Accent.TLabel").pack(
-            side="left")
-        ttk.Label(
-            tools, text="Клик — поставить. % были координатами на скрине, не заряд.",
-            style="Dim.TLabel",
-        ).pack(side="left", padx=10)
+
+        hint = ttk.Label(
+            body, textvariable=self._usb_hint, style="Dim.TLabel", wraplength=900,
+        )
+        hint.pack(fill="x", pady=(0, 6))
 
         mid = ttk.Frame(body)
         mid.pack(fill="both", expand=True)
@@ -112,9 +111,10 @@ class MapFrame(ttk.Frame):
                    command=self._delete_selected).pack(fill="x", padx=6, pady=(0, 8))
         ttk.Label(
             right,
-            text="При включении маяк шлёт свой ID.\n"
-                 "Считайте с USB, затем кликните\n"
-                 "куда его поставить на карте.",
+            text="У каждой железки свой номер.\n"
+                 "Вставьте маяк шнуром в компьютер —\n"
+                 "номер появится сам сверху.\n"
+                 "Клик по карте ставит ИМЕННО его.",
             style="Dim.TLabel", justify="left",
         ).pack(anchor="w", padx=6, pady=(0, 8))
 
@@ -192,40 +192,61 @@ class MapFrame(ttk.Frame):
         if not xy:
             return
         kind = self._place_kind.get() or "uwb"
+        device_id = self._usb_device_id.get().strip()
+        initial = KIND_LABEL.get(kind, "маяк")
+        if device_id:
+            initial = f"{initial} {device_id}"
         name = simpledialog.askstring(
-            "Маяк", "Название точки:",
-            initialvalue=KIND_LABEL.get(kind, "маяк"),
+            "Маяк",
+            "Как назвать точку на карте?\n"
+            + (f"Сейчас на шнуре железка {device_id} — её и поставим."
+               if device_id else
+               "Маяк не подключён: точка без номера железки."),
+            initialvalue=initial,
             parent=self,
         )
         if not name:
             return
-        device_id = self._usb_device_id.get().strip()
-        if not device_id:
-            device_id = simpledialog.askstring(
-                "Маяк",
-                "ID устройства (включите маяк по USB — он сам пришлёт ID):",
-                parent=self,
-            ) or ""
         self.db.add_beacon(self.event_id, name, kind, xy[0], xy[1],
-                           device_id=device_id.strip())
+                           device_id=device_id)
         self.redraw()
 
-    def _read_usb_id(self):
-        if not self.serial:
-            messagebox.showwarning("Карта", "USB-сессия недоступна", parent=self)
+    def _poll_usb_id(self):
+        """Номер маяка берётся сам, как только железку воткнули в USB."""
+        if not self.winfo_exists():
             return
-        devid, msg = self.serial.field_device_id()
-        if not devid:
-            messagebox.showwarning(
-                "Карта",
-                "Не удалось считать ID.\n"
-                "Подключите аномалию или убежище по USB и включите его.\n"
-                f"{msg}",
-                parent=self,
+        serial = self.serial
+        if not serial or not serial.connected:
+            self._usb_device_id.set("")
+            self._usb_hint.set(
+                "Вставьте аномалию или убежище шнуром в компьютер — "
+                "появится номер этой железки. Потом кликните на карте, куда её поставить."
             )
-            return
-        self._usb_device_id.set(devid)
-        messagebox.showinfo("Карта", f"ID устройства: {devid}", parent=self)
+        else:
+            dtype = serial.dev_type
+            if dtype in ("ANOMALY", "SAFE_ZONE"):
+                devid, _ = serial.field_device_id()
+                kind_ru = "аномалия" if dtype == "ANOMALY" else "убежище"
+                if devid:
+                    self._usb_device_id.set(devid)
+                    self._usb_hint.set(
+                        f"На шнуре {kind_ru} № {devid}. "
+                        "Кликните по карте — поставить ЭТУ железку на место."
+                    )
+                else:
+                    self._usb_device_id.set("")
+                    self._usb_hint.set(
+                        f"На шнуре {kind_ru}, но номер не пришёл. "
+                        "Включите устройство и подождите секунду."
+                    )
+            else:
+                self._usb_device_id.set("")
+                what = dtype or "другое устройство"
+                self._usb_hint.set(
+                    f"Сейчас на USB: {what}. Это не маяк. "
+                    "Отключите и воткните аномалию или убежище — появится её номер."
+                )
+        self.after(1000, self._poll_usb_id)
 
     def _load_image(self):
         if not self.db:

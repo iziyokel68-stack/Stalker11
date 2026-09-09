@@ -80,7 +80,7 @@ class BroadcastFrame(ttk.Frame):
             left,
             text="Адрес LoRa — только ID игрока события.\n"
                  "Имена в эфир не ходят.\n"
-                 "Громкость — долгое RT/DN на самом ПДА.\n"
+                 "Громкость — страница НАСТРОЙКИ на ПДА.\n"
                  "CHIP_BOX ответит NO_LORA: нужен пульт.",
             style="Dim.TLabel", justify="left",
         ).pack(anchor="w", padx=8, pady=(12, 8))

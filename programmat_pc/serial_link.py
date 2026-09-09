@@ -12,8 +12,8 @@ USB — только к одному устройству на ПК мастер
   CONFIG_WRITE:type=…   прошивка чипа / аномалии / убежища
   CONFIG:FUNC: / CONFIG:PRESET:   стендовая прошивка ПДА
   CONFIG:EMISSION:timer_min=…,duration_min=…
-  CONFIG:RADIO:track=N            громкость отдельно
-  CONFIG:VOLUME:level=0..30       DFPlayer (радио + уведомления)
+  CONFIG:RADIO:track=N            радио, только трек
+  CONFIG:VOLUME:level=0..30       стенд; у игрока громкость в НАСТРОЙКАХ ПДА
   LORA_TX:to=N,msg=…,v1=…,v2=…[,text=…]
   name= в CONFIG_WRITE → EEPROM @0x26 (чип регистрации)
 
