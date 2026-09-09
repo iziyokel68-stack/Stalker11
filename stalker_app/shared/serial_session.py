@@ -17,8 +17,8 @@ if PROGRAMMER_DIR not in sys.path:
 from serial_link import (  # noqa: E402
     SERIAL_AVAILABLE,
     SerialLink,
-    build_volume_cmd,
     list_port_names,
+    parse_device_id,
 )
 
 from shared.master_channel import (  # noqa: E402
@@ -27,7 +27,6 @@ from shared.master_channel import (  # noqa: E402
     lora_command,
     lora_emission,
     lora_radio,
-    lora_volume,
     eeprom_admit,
     eeprom_register,
     eeprom_revive,
@@ -36,6 +35,8 @@ from shared.master_channel import (  # noqa: E402
     CMD_REVIVE,
 )
 
+TXN_OP_REGISTER = 5
+
 
 class SerialSession:
     """Один SerialLink на всё приложение (программатор внутри того же окна)."""
@@ -43,7 +44,6 @@ class SerialSession:
     def __init__(self):
         self.link = SerialLink()
         self._lock = threading.Lock()
-        self.volume = 20
 
     @property
     def available(self) -> bool:
@@ -133,17 +133,7 @@ class SerialSession:
         return self.lora_tx(lora_emission(player_id, timer_min, duration_min))
 
     def radio(self, track: int, player_id: int = 0):
-        return self.lora_tx(lora_radio(player_id, track, self.volume))
-
-    def set_volume(self, level: int, player_id: int = 0):
-        self.volume = max(0, min(30, int(level)))
-        usb = self._need_usb()
-        if usb:
-            return False, usb
-        # Стендовый ПДА на кабеле программатора — сразу DFPlayer.
-        if self.link.dev_type == "PDA":
-            return self.link.query_ok(build_volume_cmd(self.volume))
-        return self.lora_tx(lora_volume(player_id, self.volume))
+        return self.lora_tx(lora_radio(player_id, track))
 
     def broadcast(self, text: str, player_id: int = 0):
         return self.lora_tx(lora_broadcast(player_id, text))
@@ -177,3 +167,41 @@ class SerialSession:
         if err:
             return False, err
         return self.flash_config(eeprom_revive())
+
+    def register_bridge(self, player_id: int, name: str, uid: str):
+        """Мост: CHIP_BOX пишет чип + TXN; ПДА на шнуре забирает ID и UID."""
+        err = self._need_eeprom()
+        if err:
+            return False, err
+        ok, msg = self.write_register_chip(player_id, name)
+        if not ok:
+            return False, msg
+        resp = self.link.txn_start(
+            amount=0, item_id=player_id, op=TXN_OP_REGISTER, quest_id=uid,
+        )
+        if not resp:
+            return False, self.link.last_error or "Нет ответа TXN"
+        if str(resp).startswith("ERROR"):
+            return False, resp
+        return True, resp
+
+    def poll_txn(self):
+        err = self._need_eeprom()
+        if err:
+            return None, err
+        return self.link.txn_status(), "ok"
+
+    def field_device_id(self):
+        """ID маяка/полевого устройства на USB (при включении шлёт id=)."""
+        err = self._need_usb()
+        if err:
+            return None, err
+        if getattr(self.link, "dev_id", None):
+            return self.link.dev_id, "ok"
+        for cmd in ("STALKER_WHO", "CONFIG:UID"):
+            line = self.link.query(cmd, timeout=1.5)
+            parsed = parse_device_id(line or "")
+            if parsed:
+                self.link.dev_id = parsed
+                return parsed, line
+        return None, "Нет ID — подключите аномалию или убежище по USB"

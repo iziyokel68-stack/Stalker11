@@ -47,6 +47,7 @@ static inline const char *txn_op_name(uint8_t op) {
     case TXN_OP_QUEST:    return "QUEST";
     case TXN_OP_ADMIT:    return "ADMIT";
     case TXN_OP_ATM:      return "ATM";
+    case TXN_OP_REGISTER: return "REGISTER";
     default:              return "UNKNOWN";
     }
 }

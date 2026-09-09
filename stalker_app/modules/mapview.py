@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
 from db.event_db import EventDB, BEACON_KINDS
-from theme import module_header, ACCENT, ACCENT2, DANGER, CYAN, FG_DIM
+from theme import module_header, ACCENT, ACCENT2, DANGER, CYAN, FG_DIM, BG_INPUT, BORDER, FG_MUTED
 
 KIND_LABEL = {
     "uwb": "UWB якорь",
@@ -49,14 +49,16 @@ def _load_photo(path, max_w, max_h):
 
 class MapFrame(ttk.Frame):
     def __init__(self, master, db: EventDB = None, event_id: str = None,
-                 on_back=None):
+                 on_back=None, serial=None):
         super().__init__(master)
         self.db = db
         self.event_id = event_id
         self.on_back = on_back
+        self.serial = serial
         self._photo = None
         self._img_box = (0, 0, 1, 1)  # x0,y0,w,h on canvas
         self._place_kind = tk.StringVar(value="uwb")
+        self._usb_device_id = tk.StringVar()
         self._build()
         self.after(80, self.redraw)
 
@@ -76,8 +78,12 @@ class MapFrame(ttk.Frame):
             tools, textvariable=self._place_kind, state="readonly", width=14,
             values=list(KIND_LABEL.keys()),
         ).pack(side="left")
+        ttk.Button(tools, text="Считать ID с USB",
+                   command=self._read_usb_id).pack(side="left", padx=8)
+        ttk.Label(tools, textvariable=self._usb_device_id, style="Accent.TLabel").pack(
+            side="left")
         ttk.Label(
-            tools, text="Клик по карте — поставить. Координаты заранее известны.",
+            tools, text="Клик — поставить. % были координатами на скрине, не заряд.",
             style="Dim.TLabel",
         ).pack(side="left", padx=10)
 
@@ -85,7 +91,7 @@ class MapFrame(ttk.Frame):
         mid.pack(fill="both", expand=True)
 
         self.canvas = tk.Canvas(
-            mid, bg="#1a1c22", highlightthickness=1, highlightbackground="#3a3d4a",
+            mid, bg=BG_INPUT, highlightthickness=1, highlightbackground=BORDER,
         )
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
@@ -93,17 +99,24 @@ class MapFrame(ttk.Frame):
 
         right = ttk.LabelFrame(mid, text="Маяки")
         right.pack(side="left", fill="y", padx=(10, 0))
-        cols = ("name", "kind", "xy")
+        cols = ("name", "kind", "dev")
         self.tree = ttk.Treeview(right, columns=cols, show="headings", height=16)
         self.tree.heading("name", text="Имя")
         self.tree.heading("kind", text="Тип")
-        self.tree.heading("xy", text="%")
-        self.tree.column("name", width=120)
+        self.tree.heading("dev", text="ID устройства")
+        self.tree.column("name", width=110)
         self.tree.column("kind", width=90)
-        self.tree.column("xy", width=80)
+        self.tree.column("dev", width=110)
         self.tree.pack(fill="both", expand=True, padx=6, pady=6)
         ttk.Button(right, text="Удалить выбранный", style="Danger.TButton",
                    command=self._delete_selected).pack(fill="x", padx=6, pady=(0, 8))
+        ttk.Label(
+            right,
+            text="При включении маяк шлёт свой ID.\n"
+                 "Считайте с USB, затем кликните\n"
+                 "куда его поставить на карте.",
+            style="Dim.TLabel", justify="left",
+        ).pack(anchor="w", padx=6, pady=(0, 8))
 
     def _image_path(self):
         if not self.db:
@@ -129,10 +142,10 @@ class MapFrame(ttk.Frame):
         else:
             self._img_box = (8, 8, w - 16, h - 16)
             self.canvas.create_rectangle(
-                *self._img_box, outline="#3a3d4a", dash=(4, 3)
+                *self._img_box, outline=BORDER, dash=(4, 3)
             )
             self.canvas.create_text(
-                w // 2, h // 2, fill="#8b8d9a",
+                w // 2, h // 2, fill=FG_MUTED,
                 text="Загрузите скриншот местности\nи расставьте маяки кликом",
                 font=("DejaVu Sans", 12), justify="center",
             )
@@ -148,15 +161,18 @@ class MapFrame(ttk.Frame):
             color = KIND_COLOR.get(b.kind, FG_DIM)
             r = 7
             self.canvas.create_oval(px - r, py - r, px + r, py + r,
-                                    outline=color, width=2, fill="#16161c")
+                                    outline=color, width=2, fill=BG_INPUT)
+            label = b.name
+            if b.device_id:
+                label = f"{b.name} [{b.device_id}]"
             self.canvas.create_text(
-                px + 10, py - 10, anchor="w", fill=color, text=b.name,
+                px + 10, py - 10, anchor="w", fill=color, text=label,
                 font=("DejaVu Sans", 9),
             )
             self.tree.insert(
                 "", "end", iid=str(b.beacon_id),
                 values=(b.name, KIND_LABEL.get(b.kind, b.kind),
-                        f"{b.x_pct:.1f},{b.y_pct:.1f}"),
+                        b.device_id or "—"),
             )
 
     def _pct_from_event(self, event):
@@ -177,14 +193,39 @@ class MapFrame(ttk.Frame):
             return
         kind = self._place_kind.get() or "uwb"
         name = simpledialog.askstring(
-            "Маяк", "Название (известная точка):",
+            "Маяк", "Название точки:",
             initialvalue=KIND_LABEL.get(kind, "маяк"),
             parent=self,
         )
         if not name:
             return
-        self.db.add_beacon(self.event_id, name, kind, xy[0], xy[1])
+        device_id = self._usb_device_id.get().strip()
+        if not device_id:
+            device_id = simpledialog.askstring(
+                "Маяк",
+                "ID устройства (включите маяк по USB — он сам пришлёт ID):",
+                parent=self,
+            ) or ""
+        self.db.add_beacon(self.event_id, name, kind, xy[0], xy[1],
+                           device_id=device_id.strip())
         self.redraw()
+
+    def _read_usb_id(self):
+        if not self.serial:
+            messagebox.showwarning("Карта", "USB-сессия недоступна", parent=self)
+            return
+        devid, msg = self.serial.field_device_id()
+        if not devid:
+            messagebox.showwarning(
+                "Карта",
+                "Не удалось считать ID.\n"
+                "Подключите аномалию или убежище по USB и включите его.\n"
+                f"{msg}",
+                parent=self,
+            )
+            return
+        self._usb_device_id.set(devid)
+        messagebox.showinfo("Карта", f"ID устройства: {devid}", parent=self)
 
     def _load_image(self):
         if not self.db:

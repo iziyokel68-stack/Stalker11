@@ -23,6 +23,7 @@
 #define TXN_OP_QUEST          2
 #define TXN_OP_ADMIT          3
 #define TXN_OP_ATM            4
+#define TXN_OP_REGISTER       5
 
 #define TXN_FLAG_DISCOUNT       0x01
 #define TXN_FLAG_BANK_DEPOSIT   0x02
@@ -134,6 +135,17 @@ static inline void txn_build_common(uint8_t *block, uint32_t txn_id, uint8_t op_
 static inline void txn_build_purchase(uint8_t *block, uint32_t txn_id, int32_t amount_rub,
                                       uint16_t item_id) {
     txn_build_common(block, txn_id, TXN_OP_PURCHASE, amount_rub, item_id, 0);
+}
+
+static inline void txn_build_register(uint8_t *block, uint32_t txn_id, uint16_t player_id,
+                                      const char *uid_prefix) {
+    txn_build_common(block, txn_id, TXN_OP_REGISTER, 0, player_id, 0);
+    if (uid_prefix) {
+        size_t n = strlen(uid_prefix);
+        if (n > 8) n = 8;
+        memcpy(block + TXN_OFF_RESERVED, uid_prefix, n);
+    }
+    txn_recalc_crc(block);
 }
 
 static inline void txn_set_state(uint8_t *block, uint8_t state) {

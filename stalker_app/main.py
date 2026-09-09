@@ -26,7 +26,7 @@ from modules.commands import CommandsFrame
 from modules.mapview import MapFrame
 from modules.programmer import ProgrammerFrame
 from shared.serial_session import SerialSession
-from theme import apply_theme, BG
+from theme import apply_theme, BG, tk_list_opts
 
 APP_TITLE = "STALKER — Приложение мастера"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "events")
@@ -204,7 +204,7 @@ class StalkerApp(tk.Tk):
         win.title("Открыть событие")
         win.configure(bg=BG)
         win.geometry("520x360")
-        lb = tk.Listbox(win, bg="#252732", fg="#e6e6ea", selectbackground="#4a3710")
+        lb = tk.Listbox(win, **tk_list_opts())
         lb.pack(fill="both", expand=True, padx=10, pady=10)
         rows = []
         for path in files:
@@ -309,7 +309,8 @@ class StalkerApp(tk.Tk):
         self._highlight_nav("map")
         self._clear_container()
         MapFrame(
-            self.container, self.db, self.event_id, on_back=self.show_dashboard,
+            self.container, self.db, self.event_id,
+            on_back=self.show_dashboard, serial=self.serial,
         ).pack(fill="both", expand=True)
 
     def show_programmer(self):

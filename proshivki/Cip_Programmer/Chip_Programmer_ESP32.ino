@@ -374,6 +374,10 @@ void processCommand(const String& cmd) {
         case TXN_OP_ADMIT:
             txn_build_admit(block, (uint32_t)txnId);
             break;
+        case TXN_OP_REGISTER:
+            txn_build_register(block, (uint32_t)txnId, (uint16_t)item,
+                               questId.length() ? questId.c_str() : nullptr);
+            break;
         default:
             Serial.println("ERROR:BAD_OP"); return;
         }

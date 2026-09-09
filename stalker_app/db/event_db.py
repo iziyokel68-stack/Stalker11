@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS map_beacons (
     kind        TEXT NOT NULL,
     x_pct       REAL NOT NULL,
     y_pct       REAL NOT NULL,
-    note        TEXT
+    note        TEXT,
+    device_id   TEXT
 );
 """
 
@@ -188,6 +189,7 @@ class MapBeacon:
     x_pct: float
     y_pct: float
     note: Optional[str]
+    device_id: Optional[str] = None
 
 
 def _row_to_player(r) -> Player:
@@ -230,6 +232,9 @@ class EventDB:
             self.conn.execute(
                 "ALTER TABLE players ADD COLUMN status TEXT DEFAULT 'new'"
             )
+        bcols = {r[1] for r in self.conn.execute("PRAGMA table_info(map_beacons)")}
+        if bcols and "device_id" not in bcols:
+            self.conn.execute("ALTER TABLE map_beacons ADD COLUMN device_id TEXT")
 
     def close(self):
         self.conn.close()
@@ -292,8 +297,18 @@ class EventDB:
             (event_id, name.strip(), callsign.strip(), group_name.strip(),
              notes.strip()),
         )
+        pid = cur.lastrowid
+        uid = self._mint_pda_uid(event_id, pid)
+        self.conn.execute(
+            "UPDATE players SET pda_uid=? WHERE player_id=?", (uid, pid)
+        )
         self.conn.commit()
-        return cur.lastrowid
+        return pid
+
+    def _mint_pda_uid(self, event_id: str, player_id: int) -> str:
+        """UID выдаёт мастер при регистрации, не считывается с ПДА."""
+        prefix = (event_id or "EVT").split("_")[0][:8]
+        return f"{prefix}-{int(player_id):04d}"
 
     def update_player(self, player_id: int, **fields):
         if not fields:
@@ -314,7 +329,7 @@ class EventDB:
         self.conn.commit()
 
     def bind_pda(self, player_id: int, pda_uid: str, registered_by: str = "") -> None:
-        """Привязать PDA UID к игроку (CONFIG:REGISTER на железе)."""
+        """UID выдаётся мастером при add_player, не считывается с ПДА."""
         self.update_player(
             player_id,
             pda_uid=pda_uid.strip(),
@@ -562,21 +577,22 @@ class EventDB:
         self.conn.commit()
 
     def add_beacon(self, event_id: str, name: str, kind: str,
-                   x_pct: float, y_pct: float, note: str = "") -> int:
+                   x_pct: float, y_pct: float, note: str = "",
+                   device_id: str = "") -> int:
         kind = kind if kind in BEACON_KINDS else "other"
         x_pct = max(0.0, min(100.0, float(x_pct)))
         y_pct = max(0.0, min(100.0, float(y_pct)))
         cur = self.conn.execute(
-            "INSERT INTO map_beacons(event_id, name, kind, x_pct, y_pct, note) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO map_beacons(event_id, name, kind, x_pct, y_pct, note, "
+            "device_id) VALUES (?,?,?,?,?,?,?)",
             (event_id, name.strip() or "маяк", kind, x_pct, y_pct,
-             (note or "").strip()),
+             (note or "").strip(), (device_id or "").strip() or None),
         )
         self.conn.commit()
         return cur.lastrowid
 
     def update_beacon(self, beacon_id: int, **fields):
-        allowed = {"name", "kind", "x_pct", "y_pct", "note"}
+        allowed = {"name", "kind", "x_pct", "y_pct", "note", "device_id"}
         cols = [k for k in fields if k in allowed]
         if not cols:
             return
@@ -599,7 +615,16 @@ class EventDB:
             "SELECT * FROM map_beacons WHERE event_id=? ORDER BY beacon_id",
             (event_id,),
         ).fetchall()
-        return [MapBeacon(**{k: r[k] for k in r.keys()}) for r in rows]
+        return [MapBeacon(
+            beacon_id=r["beacon_id"],
+            event_id=r["event_id"],
+            name=r["name"],
+            kind=r["kind"],
+            x_pct=r["x_pct"],
+            y_pct=r["y_pct"],
+            note=r["note"] if "note" in r.keys() else None,
+            device_id=r["device_id"] if "device_id" in r.keys() else None,
+        ) for r in rows]
 
     # --- export / import ---------------------------------------------------
 

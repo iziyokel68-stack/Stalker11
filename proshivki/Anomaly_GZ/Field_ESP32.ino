@@ -72,6 +72,20 @@ int cfgSzRad    = 1;
 int cfgSzRadFrq = 60;
 int cfgSzEmit   = 0;
 int cfgSzProt[8] = {0};
+char fieldId[8] = "000000";
+
+void initFieldId() {
+    uint64_t mac = ESP.getEfuseMac();
+    snprintf(fieldId, sizeof(fieldId), "%06X", (unsigned)(mac & 0xFFFFFF));
+}
+
+void printWho() {
+    String role = (cfgCat == 0) ? "ANOMALY" : "SAFE_ZONE";
+    Serial.print("STALKER:");
+    Serial.print(role);
+    Serial.print(":v1,id=");
+    Serial.println(fieldId);
+}
 
 void loadConfig() {
     prefs.begin("field", true);
@@ -216,8 +230,11 @@ void processCommand(String cmd) {
         Serial.println("CONFIG:" + buildConfigStr());
     }
     else if (cmd == "STALKER_WHO") {
-        String role = (cfgCat == 0) ? "ANOMALY" : "SAFE_ZONE";  // Совпадает с DEVICE_TYPE_MAP в programmer.py
-        Serial.println("STALKER:" + role + ":v1");
+        printWho();
+    }
+    else if (cmd == "CONFIG:UID") {
+        Serial.print("UID:");
+        Serial.println(fieldId);
     }
     else if (cmd == "PING") {
         Serial.println("PONG");
@@ -318,8 +335,12 @@ void setup() {
     delay(300);
 
     loadConfig();
+    initFieldId();
 
     Serial.println("=== STALKER Field Device v1.0 ===");
+    Serial.print("BEACON:id=");
+    Serial.println(fieldId);
+    printWho();
     Serial.println("MODE: " + String(cfgCat == 0 ? "ANOMALY" : "SAFEZONE"));
     Serial.println("CONFIG:" + buildConfigStr());
 

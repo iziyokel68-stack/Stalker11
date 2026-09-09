@@ -9,7 +9,8 @@
  * ╠══════════════════════════════════════════════════╣
  * ║ Миграция v2.0→v2.1 (аппаратная валидация):       ║
  * ║ • M024 320×240 — tft_panel.h MADCTL 0x88 (v2.8)  ║
- * ║ • 4 кнопки DN/RT/OK/ESC (G4–G7)                  ║
+ * ║ • 4 кнопки DN/RT/OK/ESC (G4–G7); громкость — долгое RT/DN ║
+ * ║ • G47/G48 не используются                                    ║
  * ║ • LED G15/G16, вибро G21, DFPlayer Serial2       ║
  * ║ • BU03 Serial1 G1/G2, BU03_PWR G42               ║
  * ║ • LoRa SPI G39/G40/G41, RST=G12 shared с TFT     ║
@@ -254,6 +255,8 @@ const AchDef ACH_TABLE[ACH_COUNT] = {
 int playerRank = 0;
 uint32_t achievementFlags = 0;
 bool playerRegistered = false;
+int playerEventId = 0;                 // ID игрока на событии (LoRa to=)
+char playerAssignedUid[16] = "";       // UID, выданный мастером, не MAC
 char playerName[25] = "";
 char playerCallsign[16] = "";
 char playerGroup[16] = "";
@@ -778,6 +781,38 @@ void txnHandleAdmit(TxnOutcome &o) {
   needFullRedraw = true;
 }
 
+void txnHandleRegister(uint16_t playerId, const char *uidPrefix, TxnOutcome &o) {
+  o.flagsOut = 0;
+  o.paid = 0;
+  o.balanceAfter = playerMoney;
+  char name[25] = {0};
+  uint8_t ext[24];
+  memset(ext, 0, sizeof(ext));
+  if (eepromReadBlockChUniversal(EEPROM_CHIP_EXT_BASE, ext, sizeof(ext))) {
+    memcpy(name, ext, sizeof(ext));
+    name[24] = '\0';
+  }
+  playerEventId = (int)playerId;
+  if (uidPrefix && uidPrefix[0]) {
+    if (strchr(uidPrefix, '-')) {
+      strncpy(playerAssignedUid, uidPrefix, sizeof(playerAssignedUid) - 1);
+    } else {
+      snprintf(playerAssignedUid, sizeof(playerAssignedUid), "%s-%04u",
+               uidPrefix, (unsigned)playerId);
+    }
+    playerAssignedUid[sizeof(playerAssignedUid) - 1] = '\0';
+  } else {
+    snprintf(playerAssignedUid, sizeof(playerAssignedUid), "%04u",
+             (unsigned)playerId);
+  }
+  completeRegistration(name[0] ? name : nullptr);
+  saveState();
+  o.result = TXN_RESULT_OK;
+  snprintf(o.eventMsg, sizeof(o.eventMsg), "РЕГ №%u", (unsigned)playerId);
+  o.eventColor = C_GREEN;
+  needFullRedraw = true;
+}
+
 void pollEepromTransaction() {
   if (!chipPresentOnChUniversal())
     return;
@@ -825,6 +860,13 @@ void pollEepromTransaction() {
   case TXN_OP_ADMIT:
     txnHandleAdmit(outcome);
     break;
+  case TXN_OP_REGISTER: {
+    char uidpref[9];
+    memcpy(uidpref, block + TXN_OFF_RESERVED, 8);
+    uidpref[8] = '\0';
+    txnHandleRegister(itemId, uidpref, outcome);
+    break;
+  }
   default:
     outcome.result = TXN_RESULT_NOT_IMPLEMENTED;
     outcome.paid = 0;
@@ -856,6 +898,8 @@ void loadState() {
   playerRank = prefs.getInt("rank", 0);
   achievementFlags = prefs.getUInt("ach", 0);
   playerRegistered = prefs.getBool("reg", false);
+  playerEventId = prefs.getInt("eid", 0);
+  prefs.getString("auid", playerAssignedUid, sizeof(playerAssignedUid));
   prefs.getString("pname", playerName, sizeof(playerName));
   prefs.getString("pcsign", playerCallsign, sizeof(playerCallsign));
   prefs.getString("pgroup", playerGroup, sizeof(playerGroup));
@@ -889,6 +933,8 @@ void saveState() {
   prefs.putInt("rank", playerRank);
   prefs.putUInt("ach", achievementFlags);
   prefs.putBool("reg", playerRegistered);
+  prefs.putInt("eid", playerEventId);
+  prefs.putString("auid", playerAssignedUid);
   prefs.putString("pname", playerName);
   prefs.putString("pcsign", playerCallsign);
   prefs.putString("pgroup", playerGroup);
@@ -1790,7 +1836,10 @@ bool btnState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
 bool lastFlickerableState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
 uint32_t lastDebounceTime[NUM_BTNS] = {0, 0, 0, 0};
 bool lastBtnState[NUM_BTNS] = {HIGH, HIGH, HIGH, HIGH};
+uint32_t btnDownMs[NUM_BTNS] = {0};
+bool btnLongFired[NUM_BTNS] = {false};
 #define DEBOUNCE_DELAY 50
+#define LONG_PRESS_MS 650
 
 bool getDebouncedState(int pin, int idx) {
   bool reading = digitalRead(pin);
@@ -1814,31 +1863,54 @@ bool btnPressed(int idx) {
   return pressed;
 }
 
+void adjustVolume(int delta) {
+  int v = (int)dfVolume + delta;
+  if (v < 0)
+    v = 0;
+  if (v > 30)
+    v = 30;
+  dfVolume = (uint8_t)v;
+  applyDfVolume();
+  saveConfig();
+  char buf[24];
+  snprintf(buf, sizeof(buf), "ГРОМКОСТЬ %u", (unsigned)dfVolume);
+  setEvent(buf, C_YELLOW);
+}
+
 void handleButtons() {
-  // BTN_DN (idx=0) — навигация вниз по инвентарю
-  if (btnPressed(0)) {
-    if (currentPage == 1) {
-      selectedRow = (selectedRow + 1) % 4;
+  // Короткое DN/RT — навигация. Долгое DN/RT — громкость (пины 47/48 не используются).
+  for (int idx = 0; idx < NUM_BTNS; idx++) {
+    bool state = getDebouncedState(BTN_PINS[idx], idx);
+    bool was = lastBtnState[idx];
+    if (state == LOW && was == HIGH) {
+      btnDownMs[idx] = millis();
+      btnLongFired[idx] = false;
     }
-    needFullRedraw = true;
-  }
-
-  // BTN_RT (idx=1) — страница вперёд
-  if (btnPressed(1)) {
-    currentPage = (currentPage + 1) % 5;
-    needFullRedraw = true;
-  }
-
-  // BTN_OK (idx=2) — подтверждение
-  if (btnPressed(2)) {
-    // TODO: Фаза 3 — использование предмета из инвентаря
-    needFullRedraw = true;
-  }
-
-  // BTN_ESC (idx=3) — страница назад
-  if (btnPressed(3)) {
-    currentPage = (currentPage + 4) % 5;
-    needFullRedraw = true;
+    if (state == LOW && !btnLongFired[idx] &&
+        (millis() - btnDownMs[idx]) >= LONG_PRESS_MS) {
+      btnLongFired[idx] = true;
+      if (idx == 0)
+        adjustVolume(-2);
+      else if (idx == 1)
+        adjustVolume(2);
+    }
+    bool released = (state == HIGH && was == LOW);
+    lastBtnState[idx] = state;
+    if (!released || btnLongFired[idx])
+      continue;
+    if (idx == 0) {
+      if (currentPage == 1)
+        selectedRow = (selectedRow + 1) % 4;
+      needFullRedraw = true;
+    } else if (idx == 1) {
+      currentPage = (currentPage + 1) % 5;
+      needFullRedraw = true;
+    } else if (idx == 2) {
+      needFullRedraw = true;
+    } else if (idx == 3) {
+      currentPage = (currentPage + 4) % 5;
+      needFullRedraw = true;
+    }
   }
 }
 

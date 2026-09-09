@@ -31,6 +31,8 @@ class EventDBTests(unittest.TestCase):
         self.assertEqual(players[0].player_id, pid)
         self.assertEqual(players[0].name, "Иван")
         self.assertEqual(players[0].status, "new")
+        self.assertTrue(players[0].pda_uid)
+        self.assertIn(str(pid).zfill(4), players[0].pda_uid)
 
     def test_search_and_group_filter(self):
         self.db.add_player(self.event_id, "Анна", group_name="Свобода")
@@ -98,12 +100,14 @@ class EventDBTests(unittest.TestCase):
         meta = self.db.get_map_meta(self.event_id)
         self.assertEqual(meta["image_path"], dest)
         bid = self.db.add_beacon(
-            self.event_id, "Вышка", "uwb", 12.5, 80.0, note="известная точка"
+            self.event_id, "Вышка", "uwb", 12.5, 80.0, note="известная точка",
+            device_id="AABBCC",
         )
         beacons = self.db.list_beacons(self.event_id)
         self.assertEqual(len(beacons), 1)
         self.assertEqual(beacons[0].beacon_id, bid)
         self.assertEqual(beacons[0].kind, "uwb")
+        self.assertEqual(beacons[0].device_id, "AABBCC")
         self.db.update_beacon(bid, kind="bogus", name="КПП-1")
         self.assertEqual(self.db.list_beacons(self.event_id)[0].kind, "other")
         self.db.delete_beacon(bid)

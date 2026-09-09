@@ -1,21 +1,25 @@
-"""Тёмная тема консоли мастера STALKER (Tkinter/ttk)."""
+"""Тёмная тема консоли мастера STALKER (Tkinter/ttk).
+
+Контраст: тёплый светлый текст на почти чёрном фоне, подписи — песочные,
+не серый-на-сером.
+"""
 
 import sys
 import tkinter as tk
 from tkinter import ttk
 
-BG = "#16161c"
-BG_PANEL = "#1e1f27"
-BG_RAISED = "#2a2c36"
-BG_INPUT = "#252732"
-FG = "#e6e6ea"
-FG_DIM = "#8b8d9a"
-FG_MUTED = "#6a6c78"
-ACCENT = "#e8a317"
-ACCENT2 = "#4ad07a"
-DANGER = "#e05555"
-CYAN = "#5ec8ff"
-BORDER = "#3a3d4a"
+BG = "#0a0a0c"
+BG_PANEL = "#14120e"
+BG_RAISED = "#2a2418"
+BG_INPUT = "#1a1814"
+FG = "#fff6e0"
+FG_DIM = "#d4b56a"
+FG_MUTED = "#a8884a"
+ACCENT = "#ffb020"
+ACCENT2 = "#5ee08a"
+DANGER = "#ff5a4a"
+CYAN = "#6ed4ff"
+BORDER = "#8a7038"
 
 FONT_UI = ("Segoe UI", 10) if sys.platform == "win32" else ("DejaVu Sans", 10)
 FONT_UI_B = (FONT_UI[0], 10, "bold")
@@ -23,6 +27,28 @@ FONT_H1 = (FONT_UI[0], 20, "bold")
 FONT_H2 = (FONT_UI[0], 13, "bold")
 FONT_SMALL = (FONT_UI[0], 9)
 FONT_MONO = ("Consolas", 10) if sys.platform == "win32" else ("DejaVu Sans Mono", 10)
+
+
+def tk_text_opts(**extra):
+    """Контрастные цвета для tk.Text."""
+    opts = dict(
+        bg=BG_INPUT, fg=FG, insertbackground=FG, borderwidth=0,
+        highlightthickness=1, highlightbackground=BORDER,
+        selectbackground="#6a4a10", selectforeground="#fff4c8",
+    )
+    opts.update(extra)
+    return opts
+
+
+def tk_list_opts(**extra):
+    """Контрастные цвета для tk.Listbox (без insertbackground)."""
+    opts = dict(
+        bg=BG_INPUT, fg=FG, borderwidth=0, highlightthickness=0,
+        highlightbackground=BORDER,
+        selectbackground="#6a4a10", selectforeground="#fff4c8",
+    )
+    opts.update(extra)
+    return opts
 
 
 def apply_theme(root: tk.Tk):
@@ -34,7 +60,8 @@ def apply_theme(root: tk.Tk):
         pass
 
     style.configure(".", background=BG, foreground=FG, fieldbackground=BG_INPUT,
-                    bordercolor=BORDER, font=FONT_UI)
+                    bordercolor=BORDER, font=FONT_UI, lightcolor=BORDER,
+                    darkcolor=BORDER)
     style.configure("TFrame", background=BG)
     style.configure("Panel.TFrame", background=BG_PANEL)
     style.configure("TLabel", background=BG, foreground=FG, font=FONT_UI)
@@ -50,17 +77,17 @@ def apply_theme(root: tk.Tk):
     style.configure("TButton", background=BG_RAISED, foreground=FG, bordercolor=BORDER,
                     focusthickness=0, padding=(10, 6), font=FONT_UI)
     style.map("TButton",
-              background=[("active", "#3a3d4c"), ("pressed", "#22232c")],
+              background=[("active", "#3d3420"), ("pressed", "#1c1810")],
               foreground=[("disabled", FG_MUTED)])
-    style.configure("Accent.TButton", background="#5a3d0e", foreground=ACCENT)
-    style.map("Accent.TButton", background=[("active", "#7a5414")])
-    style.configure("Danger.TButton", background="#4a2020", foreground=DANGER)
-    style.map("Danger.TButton", background=[("active", "#6a2a2a")])
+    style.configure("Accent.TButton", background="#6a4a10", foreground="#ffe7a0")
+    style.map("Accent.TButton", background=[("active", "#8a6214")])
+    style.configure("Danger.TButton", background="#5a1818", foreground="#ffc8c0")
+    style.map("Danger.TButton", background=[("active", "#7a2222")])
 
     style.configure("Nav.TButton", background=BG_PANEL, foreground=FG, anchor="w",
                     padding=(14, 10), font=FONT_UI)
     style.map("Nav.TButton", background=[("active", BG_RAISED)])
-    style.configure("NavSel.TButton", background="#3d2e10", foreground=ACCENT,
+    style.configure("NavSel.TButton", background="#5a3c0c", foreground=ACCENT,
                     anchor="w", padding=(14, 10), font=FONT_UI_B)
 
     style.configure("TEntry", fieldbackground=BG_INPUT, foreground=FG,
@@ -75,6 +102,13 @@ def apply_theme(root: tk.Tk):
     style.configure("TSeparator", background=BORDER)
     style.configure("TScrollbar", background=BG_RAISED, troughcolor=BG,
                     bordercolor=BORDER)
+    style.configure("TNotebook", background=BG, bordercolor=BORDER)
+    style.configure("TNotebook.Tab", background=BG_RAISED, foreground=FG,
+                    padding=(12, 6), font=FONT_UI)
+    style.map("TNotebook.Tab", background=[("selected", "#5a3c0c")],
+              foreground=[("selected", ACCENT)])
+
+    style.configure("TScale", background=BG, troughcolor=BG_RAISED)
 
     style.configure("Treeview", background=BG_INPUT, foreground=FG,
                     fieldbackground=BG_INPUT, bordercolor=BORDER, rowheight=24,
@@ -82,8 +116,8 @@ def apply_theme(root: tk.Tk):
     style.configure("Treeview.Heading", background=BG_RAISED, foreground=ACCENT,
                     font=FONT_UI_B, bordercolor=BORDER)
     style.map("Treeview",
-              background=[("selected", "#4a3710")],
-              foreground=[("selected", ACCENT)])
+              background=[("selected", "#6a4a10")],
+              foreground=[("selected", "#fff4c8")])
 
     style.configure("Status.TFrame", background=BG_PANEL)
     style.configure("Status.TLabel", background=BG_PANEL, foreground=FG_DIM,

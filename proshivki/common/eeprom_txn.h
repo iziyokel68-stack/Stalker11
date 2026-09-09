@@ -24,7 +24,8 @@
  *   balance    — filled by PDA: player RUB after operation
  *   result     — TXN_RESULT_* 
  *   paid       — actual debit/credit applied (after discount)
- *   reserved   — quest_id prefix (8 bytes ASCII, NUL-padded) for TXN_OP_QUEST
+ *   reserved   — quest_id prefix (8 bytes ASCII) for TXN_OP_QUEST;
+ *                assigned PDA UID prefix for TXN_OP_REGISTER (YYYYMMDD)
  */
 #ifndef STALKER_EEPROM_TXN_H
 #define STALKER_EEPROM_TXN_H
@@ -51,6 +52,7 @@
 #define TXN_OP_QUEST          2   // accept or turn-in (flags)
 #define TXN_OP_ADMIT          3   // session admit (cashier / master terminal via CH1 TXN)
 #define TXN_OP_ATM            4   // alias semantics for BANK + transfer code
+#define TXN_OP_REGISTER       5   // master desk: assign player ID + UID via cable
 
 #define TXN_FLAG_DISCOUNT       0x01  // set by PDA when rank discount applied
 #define TXN_FLAG_BANK_DEPOSIT   0x02  // BANK: deposit (else withdraw)
@@ -190,6 +192,18 @@ static inline void txn_build_quest(uint8_t *block, uint32_t txn_id, uint16_t que
 /** Terminal: session admit request (master desk). */
 static inline void txn_build_admit(uint8_t *block, uint32_t txn_id) {
     txn_build_common(block, txn_id, TXN_OP_ADMIT, 0, 0, 0);
+}
+
+/** Master CHIP_BOX: register PDA over shared EEPROM + 4-wire. item_id = player ID. */
+static inline void txn_build_register(uint8_t *block, uint32_t txn_id, uint16_t player_id,
+                                      const char *uid_prefix) {
+    txn_build_common(block, txn_id, TXN_OP_REGISTER, 0, player_id, 0);
+    if (uid_prefix) {
+        size_t n = strlen(uid_prefix);
+        if (n > 8) n = 8;
+        memcpy(block + TXN_OFF_RESERVED, uid_prefix, n);
+    }
+    txn_recalc_crc(block);
 }
 
 static inline void txn_set_state(uint8_t *block, uint8_t state) {

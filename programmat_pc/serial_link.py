@@ -61,6 +61,7 @@ class SerialLink:
         self.dev_type = None
         self.dev_ver = None
         self.terminal_role = None
+        self.dev_id = None
         self.scanning = False
         self.last_error = ""
         self._lock = threading.Lock()
@@ -81,23 +82,27 @@ class SerialLink:
             self.dev_type = None
             self.dev_ver = None
             self.terminal_role = None
+            self.dev_id = None
             self.last_error = ""
 
     def _parse_who_line(self, line):
         parts = line.split(":", 2)
         if len(parts) < 2:
-            return None, None, None
+            return None, None, None, None
         dtype = parts[1].strip()
         if dtype not in DEVICE_TYPE_MAP:
-            return None, None, None
+            return None, None, None, None
         rest = parts[2] if len(parts) > 2 else "?"
         ver = rest.split(",")[0].strip() or "?"
         role = None
+        dev_id = None
         for token in rest.split(","):
             token = token.strip()
             if token.startswith("role="):
                 role = token.split("=", 1)[1].strip()
-        return dtype, ver, role
+            elif token.startswith("id="):
+                dev_id = token.split("=", 1)[1].strip()
+        return dtype, ver, role, dev_id
 
     def _read_terminal_role(self, s):
         try:
@@ -115,14 +120,14 @@ class SerialLink:
         return None
 
     def _finish_handshake(self, s, line, boot_role=None):
-        dtype, ver, role = self._parse_who_line(line)
+        dtype, ver, role, dev_id = self._parse_who_line(line)
         if not dtype:
             return None
         if not role and boot_role:
             role = boot_role
         if dtype == "TERMINAL" and not role:
             role = self._read_terminal_role(s)
-        return dtype, ver, role
+        return dtype, ver, role, dev_id
 
     def _wait_stalker_who(self, s, boot_role=None):
         deadline = time.time() + self.HANDSHAKE_WAIT
@@ -135,7 +140,7 @@ class SerialLink:
                 if parsed:
                     return parsed
         if boot_role:
-            return "TERMINAL", "v1", boot_role
+            return "TERMINAL", "v1", boot_role, None
         return None
 
     def _try_port(self, portname):
@@ -166,7 +171,7 @@ class SerialLink:
             s.close()
         except Exception:
             pass
-        return None, None, None, None
+        return None, None, None, None, None
 
     def connect_sync(self, target_port="AUTO"):
         if not SERIAL_AVAILABLE:
@@ -176,13 +181,14 @@ class SerialLink:
             self.disconnect()
         ports = (list_port_names() if target_port == "AUTO" else [target_port])
         for p in ports:
-            s, dtype, dver, role = self._try_port(p)
+            s, dtype, dver, role, dev_id = self._try_port(p)
             if s:
                 self.ser = s
                 self.port = p
                 self.dev_type = dtype
                 self.dev_ver = dver
                 self.terminal_role = role
+                self.dev_id = dev_id
                 self.last_error = ""
                 return True
         self.last_error = "Устройство не найдено"
@@ -204,10 +210,11 @@ class SerialLink:
                 self.dev_type = None
                 self.port = None
                 self.terminal_role = None
+                self.dev_id = None
 
             ports = list_port_names() if target_port == "AUTO" else [target_port]
             for p in ports:
-                s, dtype, dver, role = self._try_port(p)
+                s, dtype, dver, role, dev_id = self._try_port(p)
                 if s:
                     with self._lock:
                         self.ser = s
@@ -215,6 +222,7 @@ class SerialLink:
                         self.dev_type = dtype
                         self.dev_ver = dver
                         self.terminal_role = role
+                        self.dev_id = dev_id
                     self.scanning = False
                     return
             self.scanning = False
@@ -347,10 +355,13 @@ class SerialLink:
             self.last_error = str(exc)
             return False
 
-    def txn_start(self, amount: int, item_id: int = 0, txn_id: int = 0):
-        cmd = f"TXN_START:amount={amount},item={item_id}"
+    def txn_start(self, amount: int = 0, item_id: int = 0, txn_id: int = 0,
+                   op: int = 0, quest_id: str = ""):
+        cmd = f"TXN_START:amount={amount},item={item_id},op={int(op)}"
         if txn_id > 0:
             cmd += f",txn_id={txn_id}"
+        if quest_id:
+            cmd += ",quest_id=" + str(quest_id).replace(",", " ")[:8]
         return self.query(cmd, timeout=3.0)
 
     def txn_status(self):
@@ -383,7 +394,8 @@ class SerialLink:
             return "[..] Поиск..."
         if self.connected:
             extra = f" role={self.terminal_role}" if self.terminal_role else ""
-            return f"[OK] {self.port}  [{self.dev_type} {self.dev_ver}{extra}]"
+            devid = f" id={self.dev_id}" if self.dev_id else ""
+            return f"[OK] {self.port}  [{self.dev_type} {self.dev_ver}{extra}{devid}]"
         return "[X]  Не подключено"
 
     def status_color(self):
@@ -423,8 +435,28 @@ def build_emission_cmd(timer_min: int, duration_min: int) -> str:
     )
 
 
+def parse_device_id(line: str):
+    """id= из STALKER_WHO / BEACON: / UID: (маяк при включении)."""
+    if not line:
+        return None
+    raw = str(line).strip()
+    for token in raw.replace(":", ",").split(","):
+        token = token.strip()
+        if token.startswith("id="):
+            val = token.split("=", 1)[1].strip()
+            return val or None
+    if raw.startswith("UID:"):
+        return raw.split(":", 1)[1].split(",")[0].strip() or None
+    if raw.startswith("BEACON:"):
+        rest = raw.split(":", 1)[1].strip()
+        if rest.startswith("id="):
+            rest = rest[3:]
+        return rest.split(",")[0].strip() or None
+    return None
+
+
 def build_radio_cmd(track: int, volume: int = 0) -> str:
-    """Радио: только трек. Громкость — CONFIG:VOLUME (DFPlayer 0–30)."""
+    """Радио: только трек. Громкость — кнопки на ПДА, не мастер."""
     return f"CONFIG:RADIO:track={int(track)}"
 
 

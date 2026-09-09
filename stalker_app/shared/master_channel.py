@@ -31,19 +31,28 @@ LORA_DEVICES = {"MASTER_PULT", "PULT", "PDA"}  # PDA — только стенд
 
 
 def player_id_from_target(target: str) -> int:
-    """'all' / 'group:…' → 0 (всем). 'player:<id>:…' → номер регистрации."""
-    raw = (target or "all").strip()
-    if not raw or raw == "all" or raw.startswith("group:"):
+    """Только ID игрока события. 0 / 'все' = всем. Имена в LoRa не ходят."""
+    raw = (target or "0").strip().lower()
+    if not raw or raw in ("all", "все", "0") or raw.startswith("0 "):
         return 0
     if raw.startswith("player:"):
         try:
             return int(raw.split(":")[1])
         except (IndexError, ValueError):
             return 0
+    token = raw.split()[0]
     try:
-        return int(raw)
+        return int(token)
     except ValueError:
         return 0
+
+
+def id_choices(players) -> list:
+    """Список целей LoRa: только ID (имена — в карточке, не в эфире)."""
+    values = ["0"]
+    for p in players:
+        values.append(str(p.player_id))
+    return values
 
 
 def lora_emission(player_id: int, timer_min: int, duration_min: int) -> str:
@@ -51,13 +60,9 @@ def lora_emission(player_id: int, timer_min: int, duration_min: int) -> str:
     return build_lora_cmd(player_id, "EMISSION", v1, v2)
 
 
-def lora_radio(player_id: int, track: int, volume: int = 0) -> str:
-    return build_lora_cmd(player_id, "RADIO", int(track), int(volume))
-
-
-def lora_volume(player_id: int, level: int) -> str:
-    level = max(0, min(30, int(level)))
-    return build_lora_cmd(player_id, "VOLUME", level, 0)
+def lora_radio(player_id: int, track: int) -> str:
+    """Радио: только трек. Громкость — кнопки на ПДА."""
+    return build_lora_cmd(player_id, "RADIO", int(track), 0)
 
 
 def lora_broadcast(player_id: int, text: str) -> str:

@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from db.event_db import EventDB
-from theme import module_header
+from theme import module_header, tk_text_opts
 
 
 class QuestsFrame(ttk.Frame):
@@ -54,9 +54,7 @@ class QuestsFrame(ttk.Frame):
                         variable=self.var_hidden).pack(anchor="w", padx=8, pady=4)
         ttk.Label(form, text="Полный текст (на доске / ПК)").pack(
             anchor="w", padx=8, pady=(6, 2))
-        self.txt_body = tk.Text(form, width=32, height=8, bg="#252732", fg="#e6e6ea",
-                                insertbackground="#e6e6ea", borderwidth=0,
-                                highlightthickness=1, highlightbackground="#3a3d4a")
+        self.txt_body = tk.Text(form, width=32, height=8, **tk_text_opts())
         self.txt_body.pack(padx=8, pady=(0, 8))
 
         ttk.Button(form, text="Добавить", command=self._add).pack(fill="x", padx=8, pady=2)

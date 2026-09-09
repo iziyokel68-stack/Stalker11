@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from db.event_db import EventDB
-from theme import module_header
+from theme import module_header, tk_list_opts
 
 
 class StatsFrame(ttk.Frame):
@@ -31,8 +31,7 @@ class StatsFrame(ttk.Frame):
         left.pack(side="left", fill="y")
         self.player_list = tk.Listbox(
             left, width=28, height=18, exportselection=False,
-            bg="#252732", fg="#e6e6ea", highlightthickness=0, borderwidth=0,
-            selectbackground="#4a3710",
+            **tk_list_opts(),
         )
         self.player_list.pack(padx=6, pady=6, fill="y")
         self.player_list.bind("<<ListboxSelect>>", self._on_select_player)

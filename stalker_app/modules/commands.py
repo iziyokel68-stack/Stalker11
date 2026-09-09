@@ -1,10 +1,10 @@
-"""Команды мастера: LoRa по № регистрации или EEPROM-чип (не USB к ПДА)."""
+"""Команды мастера: LoRa по ID игрока события или EEPROM-чип (не USB к ПДА)."""
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from shared.master_channel import player_id_from_target
-from theme import module_header
+from shared.master_channel import id_choices, player_id_from_target
+from theme import module_header, tk_text_opts
 
 
 class CommandsFrame(ttk.Frame):
@@ -23,16 +23,16 @@ class CommandsFrame(ttk.Frame):
 
         ttk.Label(
             body,
-            text="ПДА игрока: LoRa на № регистрации или чип в CHIP_BOX. "
-                 "USB — одно устройство мастера, не кабель к каждому ПДА.",
+            text="ПДА игрока: LoRa на ID события или чип в CHIP_BOX. "
+                 "Имена в эфир не ходят. USB — устройство мастера, не кабель к каждому ПДА.",
             style="Dim.TLabel", wraplength=820,
         ).pack(anchor="w", pady=(0, 10))
 
         row = ttk.Frame(body)
         row.pack(fill="x", pady=4)
-        ttk.Label(row, text="Кому").pack(side="left")
-        self.var_target = tk.StringVar(value="all")
-        self.cmb_target = ttk.Combobox(row, textvariable=self.var_target, width=28)
+        ttk.Label(row, text="Кому (ID, 0 = все)").pack(side="left")
+        self.var_target = tk.StringVar(value="0")
+        self.cmb_target = ttk.Combobox(row, textvariable=self.var_target, width=16)
         self.cmb_target.pack(side="left", padx=8)
         self._refresh_targets()
 
@@ -52,23 +52,19 @@ class CommandsFrame(ttk.Frame):
         ttk.Button(row3, text="Прошить чип воскрешения",
                    command=self._chip_revive).pack(side="left", padx=4)
 
-        self.out = tk.Text(body, height=16, bg="#252732", fg="#c8f0d0",
-                           insertbackground="#e6e6ea", borderwidth=0,
-                           font=("DejaVu Sans Mono", 10))
+        self.out = tk.Text(body, height=16, font=("DejaVu Sans Mono", 10),
+                           **tk_text_opts())
         self.out.pack(fill="both", expand=True, pady=(10, 0))
 
         ttk.Label(
             body,
             text="ADMIT ≠ REVIVE. Допуск — каждое включение, главный мастер.\n"
-                 "Воскрешение — при «СВЯЗЬ ПОТЕРЯНА», не для зомби.",
+                 "Воскрешение и KILL — по LoRa на ID игрока.",
             style="Dim.TLabel", justify="left",
         ).pack(anchor="w", pady=(8, 0))
 
     def _refresh_targets(self):
-        values = ["all"]
-        for p in self.db.list_players(self.event_id):
-            values.append(f"player:{p.player_id}:{p.name}")
-        self.cmb_target["values"] = values
+        self.cmb_target["values"] = id_choices(self.db.list_players(self.event_id))
 
     def _log(self, text):
         self.out.insert("end", text + "\n")
@@ -82,7 +78,7 @@ class CommandsFrame(ttk.Frame):
             return
         pid = self._pid()
         ok, resp = self.serial.admit_lora(pid)
-        self._log(("OK " if ok else "FAIL ") + f"ADMIT №{pid}  {resp}")
+        self._log(("OK " if ok else "FAIL ") + f"ADMIT ID {pid}  {resp}")
         if not ok:
             messagebox.showerror("Допуск", str(resp), parent=self)
 
@@ -91,7 +87,7 @@ class CommandsFrame(ttk.Frame):
             return
         pid = self._pid()
         ok, resp = self.serial.revive_lora(pid)
-        self._log(("OK " if ok else "FAIL ") + f"REVIVE №{pid}  {resp}")
+        self._log(("OK " if ok else "FAIL ") + f"REVIVE ID {pid}  {resp}")
         if not ok:
             messagebox.showerror("Воскрешение", str(resp), parent=self)
 
@@ -100,7 +96,7 @@ class CommandsFrame(ttk.Frame):
             return
         pid = self._pid()
         ok, resp = self.serial.kill_lora(pid)
-        self._log(("OK " if ok else "FAIL ") + f"KILL №{pid}  {resp}")
+        self._log(("OK " if ok else "FAIL ") + f"KILL ID {pid}  {resp}")
         if not ok:
             messagebox.showerror("KILL", str(resp), parent=self)
 

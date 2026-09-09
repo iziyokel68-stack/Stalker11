@@ -4,7 +4,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 
-from theme import module_header
+from theme import module_header, tk_list_opts
 
 
 def _fmt_ts(ts):
@@ -82,9 +82,7 @@ class DashboardFrame(ttk.Frame):
 
         hist = ttk.LabelFrame(body, text="Последние оповещения")
         hist.pack(fill="both", expand=True)
-        self.bcast = tk.Listbox(hist, height=8, bg="#252732", fg="#e6e6ea",
-                                highlightthickness=0, borderwidth=0,
-                                selectbackground="#4a3710")
+        self.bcast = tk.Listbox(hist, height=8, **tk_list_opts())
         self.bcast.pack(fill="both", expand=True, padx=8, pady=8)
 
     def _goto(self, key):

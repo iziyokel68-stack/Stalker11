@@ -17,9 +17,11 @@ from serial_link import (
     build_register_cmd,
     build_volume_cmd,
     emission_seconds,
+    parse_device_id,
 )
 from config_builder import build_chip_config, build_config_for_device
 from shared.master_channel import (
+    id_choices,
     lora_emission,
     lora_radio,
     player_id_from_target,
@@ -60,11 +62,23 @@ class SerialCmdTests(unittest.TestCase):
 
     def test_player_target_and_lora_helpers(self):
         self.assertEqual(player_id_from_target("all"), 0)
+        self.assertEqual(player_id_from_target("0"), 0)
         self.assertEqual(player_id_from_target("player:12:Иван"), 12)
+        self.assertEqual(player_id_from_target("12"), 12)
         self.assertEqual(player_id_from_target("group:Долг"), 0)
         self.assertIn("msg=EMISSION", lora_emission(0, 30, 5))
         self.assertIn("v1=1800", lora_emission(0, 30, 5))
-        self.assertEqual(lora_radio(7, 2, 18), "LORA_TX:to=7,msg=RADIO,v1=2,v2=18")
+        self.assertEqual(lora_radio(7, 2), "LORA_TX:to=7,msg=RADIO,v1=2,v2=0")
+        class P:
+            def __init__(self, i):
+                self.player_id = i
+        self.assertEqual(id_choices([P(3), P(9)]), ["0", "3", "9"])
+
+    def test_parse_device_id(self):
+        self.assertEqual(parse_device_id("STALKER:ANOMALY:v1,id=AABBCC"), "AABBCC")
+        self.assertEqual(parse_device_id("BEACON:id=00FF12"), "00FF12")
+        self.assertEqual(parse_device_id("UID:00FF12"), "00FF12")
+        self.assertIsNone(parse_device_id("STALKER:CHIP_BOX:v1"))
 
     def test_chip_config_registration(self):
         s = build_chip_config({

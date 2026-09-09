@@ -1,7 +1,8 @@
 """
 STALKER App — модуль «Регистрация» (docs/PROGRESSION.txt §10.1, §10.3 Фаза 2)
 ================================================================================
-Список участников: № = адрес LoRa. Имя на ПДА — EEPROM-чип (CHIP_BOX).
+Список участников: ID = адрес LoRa. UID выдаёт мастер при добавлении в список.
+Регистрация на ПДА — шнур к CHIP_BOX мастера через общий чип (мост).
 """
 
 import time
@@ -99,12 +100,10 @@ class RegistrationFrame(ttk.Frame):
         row("Позывной", self.var_callsign)
         row("Группа", self.var_group)
         row("Заметки", self.var_notes)
-        ttk.Label(form, text="PDA UID — опционально, с чипа/NVS позже",
+        ttk.Label(form, text="PDA UID (выдаёт мастер, не считывается с ПДА)",
                   style="Dim.TLabel").pack(anchor="w", padx=8)
-        ttk.Entry(form, textvariable=self.var_pda_uid, width=26).pack(
-            anchor="w", padx=8, pady=(0, 4))
-        ttk.Button(form, text="Привязать UID вручную", command=self._bind_pda).pack(
-            fill="x", padx=8, pady=2)
+        ttk.Entry(form, textvariable=self.var_pda_uid, width=26,
+                  state="readonly").pack(anchor="w", padx=8, pady=(0, 4))
         self.lbl_status = ttk.Label(form, text="Статус: новый", style="Dim.TLabel")
         self.lbl_status.pack(anchor="w", padx=8, pady=(4, 8))
 
@@ -112,11 +111,13 @@ class RegistrationFrame(ttk.Frame):
             fill="x", padx=8, pady=2)
         ttk.Button(form, text="Сохранить изменения", command=self._save_player).pack(
             fill="x", padx=8, pady=2)
-        ttk.Button(form, text="Прошить чип регистрации", style="Accent.TButton",
-                   command=self._write_reg_chip).pack(fill="x", padx=8, pady=(10, 2))
+        ttk.Button(form, text="Записать на мост (шнур к ПДА)", style="Accent.TButton",
+                   command=self._write_bridge).pack(fill="x", padx=8, pady=(10, 2))
+        ttk.Button(form, text="Проверить ответ ПДА", command=self._poll_bridge).pack(
+            fill="x", padx=8, pady=2)
         ttk.Button(form, text="Прошить чип допуска", command=self._write_admit_chip).pack(
             fill="x", padx=8, pady=2)
-        ttk.Button(form, text="Допуск по LoRa (№)", command=self._admit_lora).pack(
+        ttk.Button(form, text="Допуск по LoRa (ID)", command=self._admit_lora).pack(
             fill="x", padx=8, pady=2)
         ttk.Button(form, text="Допуск только в базе", command=self._admit_db).pack(
             fill="x", padx=8, pady=2)
@@ -130,10 +131,10 @@ class RegistrationFrame(ttk.Frame):
             fill="x", padx=8, pady=2)
 
         note = (
-            "№ в списке = адрес LoRa (0 = все).\n"
-            "Имя на ПДА — чип EEPROM (CHIP_BOX):\n"
-            "прошить → вставить игроку в слот.\n"
-            "ПДА по USB к мастеру не подключают."
+            "ID в списке = адрес LoRa (0 = все).\n"
+            "UID выдаётся при добавлении игрока.\n"
+            "Регистрация: CHIP_BOX мастера + общий чип +\n"
+            "шнур к ПДА. Имена в LoRa не ходят."
         )
         ttk.Label(form, text=note, style="Dim.TLabel", justify="left").pack(
             fill="x", padx=8, pady=(10, 8))
@@ -201,14 +202,21 @@ class RegistrationFrame(ttk.Frame):
         if not name:
             messagebox.showwarning("Регистрация", "Укажите имя игрока", parent=self)
             return
-        self.db.add_player(
+        pid = self.db.add_player(
             self.event_id, name,
             callsign=self.var_callsign.get(),
             group_name=self.var_group.get(),
             notes=self.var_notes.get(),
         )
+        p = self.db.get_player(pid)
         self._clear_form()
         self.refresh()
+        messagebox.showinfo(
+            "Регистрация",
+            f"Игрок добавлен. ID {pid}, UID {p.pda_uid if p else ''}.\n"
+            "UID выдан мастером — на ПДА он попадёт через мост.",
+            parent=self,
+        )
 
     def _save_player(self):
         if self.selected_player_id is None:
@@ -227,24 +235,7 @@ class RegistrationFrame(ttk.Frame):
         )
         self.refresh()
 
-    def _bind_pda(self):
-        if self.selected_player_id is None:
-            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
-            return
-        uid = self.var_pda_uid.get().strip()
-        if not uid:
-            messagebox.showwarning("Регистрация", "Укажите PDA UID", parent=self)
-            return
-        try:
-            self.db.bind_pda(self.selected_player_id, uid, registered_by="master")
-        except Exception as exc:
-            messagebox.showerror("Регистрация", f"Не удалось привязать PDA: {exc}",
-                                 parent=self)
-            return
-        self.refresh()
-        self._on_select()
-
-    def _write_reg_chip(self):
+    def _write_bridge(self):
         if self.selected_player_id is None:
             messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
@@ -252,25 +243,34 @@ class RegistrationFrame(ttk.Frame):
             messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
             return
         p = self.db.get_player(self.selected_player_id)
-        ok, resp = self.serial.write_register_chip(p.player_id, p.name)
+        ok, resp = self.serial.register_bridge(p.player_id, p.name, p.pda_uid or "")
         if not ok:
             messagebox.showerror(
                 "Регистрация",
-                "Чип не записан (нужен CHIP_BOX с EEPROM).\n"
-                f"{resp}\nИмя и № сохранены в базе.",
+                "Мост не записан (нужен CHIP_BOX с общим чипом).\n"
+                f"{resp}",
                 parent=self,
             )
-            self.db.mark_registered(self.selected_player_id, registered_by="master")
-            self.refresh()
             return
-        self.db.mark_registered(self.selected_player_id, registered_by="eeprom")
+        self.db.mark_registered(self.selected_player_id, registered_by="bridge")
         self.refresh()
         self._on_select()
         messagebox.showinfo(
             "Регистрация",
-            f"Чип №{p.player_id} «{p.name}». Игрок вставляет в слот ПДА.\n{resp}",
+            f"Мост ID {p.player_id}, UID {p.pda_uid}.\n"
+            "Подключите ПДА шнуром к CHIP_BOX — он заберёт ID и UID.\n"
+            f"{resp}",
             parent=self,
         )
+
+    def _poll_bridge(self):
+        if self.serial is None:
+            return
+        status, msg = self.serial.poll_txn()
+        if status is None:
+            messagebox.showwarning("Мост", str(msg), parent=self)
+            return
+        messagebox.showinfo("Мост", str(status), parent=self)
 
     def _write_admit_chip(self):
         if self.selected_player_id is None:

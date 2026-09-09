@@ -48,7 +48,6 @@ class ProgrammerFrame(ttk.Frame):
         super().__init__(master)
         self.serial = serial
         self.on_back = on_back
-        self.chip_params = [tk.StringVar(value="0") for _ in range(16)]
         self.anom_bits = [tk.BooleanVar(value=(i == 0)) for i in range(7)]
         self.sz_prot = [tk.StringVar(value="0") for _ in range(8)]
         self.pda_prot = [tk.StringVar(value="0") for _ in range(8)]
@@ -104,11 +103,10 @@ class ProgrammerFrame(ttk.Frame):
 
     def _build_chip(self):
         f = self.tab_chip
-        self.var_chip_type = tk.IntVar(value=0)
-        self.var_chip_sub = tk.IntVar(value=0)
         self.var_chip_uses = tk.StringVar(value="1")
         self.var_reg_name = tk.StringVar()
-        self.var_reg_id = tk.StringVar(value="1")
+        self.var_pct = tk.BooleanVar(value=False)
+        self.field_vars = {}
 
         top = ttk.Frame(f)
         top.pack(fill="x", padx=8, pady=8)
@@ -118,33 +116,17 @@ class ProgrammerFrame(ttk.Frame):
         self.cmb_chip_type.current(0)
         self.cmb_chip_type.pack(side="left", padx=6)
         self.cmb_chip_type.bind("<<ComboboxSelected>>", self._on_chip_type)
-        ttk.Label(top, text="Подтип").pack(side="left", padx=(12, 0))
+        ttk.Label(top, text="Что за чип").pack(side="left", padx=(12, 0))
         self.cmb_chip_sub = ttk.Combobox(top, state="readonly", width=28)
         self.cmb_chip_sub.pack(side="left", padx=6)
-        self._refresh_subs()
-        ttk.Label(top, text="Использований").pack(side="left", padx=(12, 0))
+        self.cmb_chip_sub.bind("<<ComboboxSelected>>", lambda _e: self._refresh_chip_fields())
+        ttk.Label(top, text="Сколько раз можно использовать").pack(side="left", padx=(12, 0))
         ttk.Entry(top, textvariable=self.var_chip_uses, width=6).pack(side="left", padx=4)
 
-        grid = ttk.LabelFrame(f, text="Параметры p0…p15")
-        grid.pack(fill="x", padx=8, pady=4)
-        for i in range(16):
-            cell = ttk.Frame(grid)
-            cell.grid(row=i // 8, column=i % 8, padx=4, pady=4, sticky="w")
-            ttk.Label(cell, text=f"p{i}", width=3).pack(side="left")
-            ttk.Entry(cell, textvariable=self.chip_params[i], width=6).pack(side="left")
-
-        reg = ttk.LabelFrame(f, text="Чип регистрации (админка / РЕГИСТРАЦИЯ)")
-        reg.pack(fill="x", padx=8, pady=8)
-        ttk.Label(reg, text="№ игрока (p0)").pack(side="left", padx=8)
-        ttk.Entry(reg, textvariable=self.var_reg_id, width=8).pack(side="left")
-        ttk.Label(reg, text="Имя (EEPROM @0x26)").pack(side="left", padx=8)
-        ttk.Entry(reg, textvariable=self.var_reg_name, width=24).pack(side="left")
-        ttk.Label(
-            f,
-            text="Имя не влезает в LoRa-пакет 8 байт — только на чип. "
-                 "В поле ПДА получает № по LoRa и имя с чипа.",
-            style="Dim.TLabel", wraplength=760, justify="left",
-        ).pack(anchor="w", padx=8, pady=(4, 8))
+        self.chip_fields = ttk.LabelFrame(f, text="Параметры (человеческим языком)")
+        self.chip_fields.pack(fill="both", expand=True, padx=8, pady=8)
+        self._refresh_subs()
+        self._refresh_chip_fields()
 
     def _refresh_subs(self):
         t = self.cmb_chip_type.current()
@@ -156,6 +138,168 @@ class ProgrammerFrame(ttk.Frame):
 
     def _on_chip_type(self, _evt=None):
         self._refresh_subs()
+        self._refresh_chip_fields()
+
+    def _add_labeled(self, parent, key, label, unit="", default="0"):
+        var = self.field_vars.get(key)
+        if var is None:
+            var = tk.StringVar(value=default)
+            self.field_vars[key] = var
+        r = ttk.Frame(parent)
+        r.pack(fill="x", padx=8, pady=3)
+        ttk.Label(r, text=label, width=28).pack(side="left")
+        ttk.Entry(r, textvariable=var, width=10).pack(side="left")
+        if unit:
+            ttk.Label(r, text=unit, style="Dim.TLabel").pack(side="left", padx=6)
+
+    def _prot_grid(self, parent, prefix="prot"):
+        box = ttk.LabelFrame(parent, text="Защита от урона, %")
+        box.pack(fill="x", padx=8, pady=6)
+        for i, name in enumerate(PROT_LABELS):
+            key = f"{prefix}{i}"
+            var = self.field_vars.get(key)
+            if var is None:
+                var = tk.StringVar(value="0")
+                self.field_vars[key] = var
+            cell = ttk.Frame(box)
+            cell.grid(row=i // 4, column=i % 4, padx=4, pady=3, sticky="w")
+            ttk.Label(cell, text=name, width=10).pack(side="left")
+            ttk.Entry(cell, textvariable=var, width=5).pack(side="left")
+
+    def _refresh_chip_fields(self):
+        for w in self.chip_fields.winfo_children():
+            w.destroy()
+        t = max(0, self.cmb_chip_type.current())
+        st = max(0, self.cmb_chip_sub.current())
+        f = self.chip_fields
+        ttk.Checkbutton(
+            f, text="Значения в процентах (где есть выбор HP / %)",
+            variable=self.var_pct,
+        ).pack(anchor="w", padx=8, pady=(4, 2))
+
+        if t == 0:
+            if st == 0:
+                self._add_labeled(f, "heal", "Вылечить", "HP или % от запаса")
+            elif st == 1:
+                self._add_labeled(f, "rad", "Снять радиацию", "RAD или %")
+            elif st == 2:
+                self._add_labeled(f, "regen_hp", "Восстановление жизней", "в секунду")
+                self._add_labeled(f, "regen_hp_t", "Сколько секунд действует (HP)", "сек")
+                self._add_labeled(f, "regen_rad", "Очистка радиации", "в секунду")
+                self._add_labeled(f, "regen_rad_t", "Сколько секунд действует (RAD)", "сек")
+            elif st == 3:
+                self._prot_grid(f)
+                self._add_labeled(f, "stim_t", "Длительность стимулятора", "сек")
+            elif st == 4:
+                self._add_labeled(f, "restore", "Починить предмет", "единицы или %")
+            elif st == 5:
+                self._add_labeled(f, "upgrade_hp", "Добавить прочности предмету", "ед., макс 250")
+                self._add_labeled(f, "upgrade_pct", "Улучшить параметры", "%")
+        elif t == 1:
+            self._add_labeled(f, "arm_regen", "Реген жизней в броне", "HP в минуту")
+            self._add_labeled(f, "arm_int", "Как часто реген", "сек")
+            self._add_labeled(f, "arm_bonus", "Дополнительные жизни", "HP")
+            self._prot_grid(f)
+        elif t == 2:
+            self._add_labeled(f, "art_regen", "Реген жизней артефакта", "HP в минуту")
+            ttk.Label(f, text="Защита и урон по типам — ниже.",
+                      style="Dim.TLabel").pack(anchor="w", padx=8)
+            self._prot_grid(f)
+        elif t == 3:
+            if st == 0:
+                ttk.Label(f, text="Воскрешение: параметров нет — чип просто поднимает игрока.",
+                          style="Dim.TLabel").pack(anchor="w", padx=8, pady=8)
+            elif st == 1:
+                self._add_labeled(f, "money", "Сумма (плюс или минус)", "руб")
+            elif st == 2:
+                self._add_labeled(f, "lvl", "Изменить уровень", "")
+                self._add_labeled(f, "xp", "Изменить опыт", "XP")
+            elif st == 3:
+                self._add_labeled(f, "imm", "Длительность иммунитета", "мин")
+            elif st in (4, 5):
+                ttk.Label(f, text="Команда без чисел: сброс или нейтрализация.",
+                          style="Dim.TLabel").pack(anchor="w", padx=8, pady=8)
+            elif st == 6:
+                self._add_labeled(f, "adm_h", "Допуск через сколько часов", "ч")
+                self._add_labeled(f, "adm_m", "и минут", "мин")
+            elif st == 7:
+                self._add_labeled(f, "reg_id", "ID игрока на этом событии", "", default="1")
+                r = ttk.Frame(f)
+                r.pack(fill="x", padx=8, pady=3)
+                ttk.Label(r, text="Имя на чип (не в эфир LoRa)", width=28).pack(side="left")
+                ttk.Entry(r, textvariable=self.var_reg_name, width=24).pack(side="left")
+                ttk.Label(
+                    f,
+                    text="Регистрация идёт через мост: устройство мастера + общий чип + шнур к ПДА.",
+                    style="Dim.TLabel", wraplength=720,
+                ).pack(anchor="w", padx=8, pady=6)
+
+    def _fv(self, key, default=0):
+        var = self.field_vars.get(key)
+        if var is None:
+            return default
+        return self._i(var, default)
+
+    def _chip_dict(self):
+        t = max(0, self.cmb_chip_type.current())
+        st = max(0, self.cmb_chip_sub.current())
+        p = [0] * 16
+        pct = 1 if self.var_pct.get() else 0
+        if t == 0:
+            if st == 0:
+                p[0], p[1] = self._fv("heal"), pct
+            elif st == 1:
+                p[0], p[1] = self._fv("rad"), pct
+            elif st == 2:
+                p[0] = self._fv("regen_hp")
+                p[1] = pct
+                p[2] = self._fv("regen_hp_t")
+                p[3] = self._fv("regen_rad")
+                p[4] = pct
+                p[5] = self._fv("regen_rad_t")
+            elif st == 3:
+                for i in range(8):
+                    p[i] = self._fv(f"prot{i}")
+                p[8] = self._fv("stim_t")
+            elif st == 4:
+                p[0], p[1] = self._fv("restore"), pct
+            elif st == 5:
+                p[0] = self._fv("upgrade_hp")
+                p[1] = self._fv("upgrade_pct")
+        elif t == 1:
+            for i in range(8):
+                p[i] = self._fv(f"prot{i}")
+            interval = max(1, self._fv("arm_int", 30))
+            regen = self._fv("arm_regen")
+            p[8] = round(regen * interval / 60) if interval else regen
+            p[9] = interval
+            p[10] = self._fv("arm_bonus")
+        elif t == 2:
+            interval = 60
+            regen = self._fv("art_regen")
+            p[0] = round(regen * interval / 60) if interval else regen
+            p[1] = interval
+            for i in range(7):
+                p[2 + i] = self._fv(f"prot{i}")
+            p[9] = self._fv("prot7")
+        elif t == 3:
+            if st == 1:
+                p[0] = self._fv("money")
+            elif st == 2:
+                p[0], p[1] = self._fv("lvl"), self._fv("xp")
+            elif st == 3:
+                p[0] = self._fv("imm")
+            elif st == 6:
+                p[0], p[1] = self._fv("adm_h"), self._fv("adm_m")
+            elif st == 7:
+                p[0] = self._fv("reg_id", 1)
+        return {
+            "chip_type": t,
+            "chip_sub": st,
+            "uses": max(0, min(255, self._i(self.var_chip_uses, 1))),
+            "params": p,
+            "reg_name": self.var_reg_name.get().strip(),
+        }
 
     def _build_anom(self):
         f = self.tab_anom
@@ -277,20 +421,6 @@ class ProgrammerFrame(ttk.Frame):
             return int(var.get())
         except (TypeError, ValueError, tk.TclError):
             return default
-
-    def _chip_dict(self):
-        t = max(0, self.cmb_chip_type.current())
-        st = max(0, self.cmb_chip_sub.current())
-        params = [self._i(v) for v in self.chip_params]
-        if t == 3 and st == 7:
-            params[0] = self._i(self.var_reg_id, 1)
-        return {
-            "chip_type": t,
-            "chip_sub": st,
-            "uses": max(0, min(255, self._i(self.var_chip_uses, 1))),
-            "params": params,
-            "reg_name": self.var_reg_name.get().strip(),
-        }
 
     def _anom_dict(self):
         mask = 0
