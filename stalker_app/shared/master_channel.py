@@ -4,6 +4,15 @@ USB Serial — только к одному устройству на ПК/те�
 Доставка до игрока: LoRa по № регистрации или общий EEPROM-чип.
 """
 
+import os
+import sys
+
+PROGRAMMER_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "programmat_pc")
+)
+if PROGRAMMER_DIR not in sys.path:
+    sys.path.insert(0, PROGRAMMER_DIR)
+
 from serial_link import (
     build_admit_chip,
     build_lora_cmd,
