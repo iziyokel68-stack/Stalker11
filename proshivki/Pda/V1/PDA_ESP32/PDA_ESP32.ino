@@ -40,6 +40,7 @@
  * ╚══════════════════════════════════════════════════╝
  */
 
+#include <string.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 #include <DFRobotDFPlayerMini.h>
@@ -195,8 +196,11 @@ void setEvent(const char *text, uint16_t color);
 void checkLevelUps();
 void checkRankReadyNotify();
 void saveState();
+void completeRegistration(const char *name);
 extern Preferences prefs;
 extern bool needFullRedraw;
+extern bool isAudioReady;
+extern DFRobotDFPlayerMini myDFPlayer;
 
 #define MAX_LEVEL 100
 #define REGISTRATION_LEVEL 2
@@ -248,6 +252,9 @@ const AchDef ACH_TABLE[ACH_COUNT] = {
 int playerRank = 0;
 uint32_t achievementFlags = 0;
 bool playerRegistered = false;
+char playerName[25] = "";
+char playerCallsign[16] = "";
+char playerGroup[16] = "";
 uint32_t sessionStartMs = 0;
 uint32_t lastDeathAtLevelUp = 0;
 bool surviveAchPending = false;
@@ -369,9 +376,18 @@ void checkLevelUps() {
   checkRankReadyNotify();
 }
 
-void completeRegistration() {
-  if (playerRegistered)
+void completeRegistration(const char *name) {
+  bool nameUpdated = false;
+  if (name && name[0]) {
+    strncpy(playerName, name, sizeof(playerName) - 1);
+    playerName[sizeof(playerName) - 1] = '\0';
+    nameUpdated = true;
+  }
+  if (playerRegistered) {
+    if (nameUpdated)
+      saveState();
     return;
+  }
   playerRegistered = true;
   if (playerLevel < REGISTRATION_LEVEL)
     playerLevel = REGISTRATION_LEVEL;
@@ -753,7 +769,7 @@ void txnHandleAdmit(TxnOutcome &o) {
     return;
   }
   admitPending = false;
-  completeRegistration();
+  completeRegistration(nullptr);
   o.result = TXN_RESULT_OK;
   snprintf(o.eventMsg, sizeof(o.eventMsg), "ДОПУСК В ИГРУ");
   o.eventColor = C_GREEN;
@@ -838,6 +854,9 @@ void loadState() {
   playerRank = prefs.getInt("rank", 0);
   achievementFlags = prefs.getUInt("ach", 0);
   playerRegistered = prefs.getBool("reg", false);
+  prefs.getString("pname", playerName, sizeof(playerName));
+  prefs.getString("pcsign", playerCallsign, sizeof(playerCallsign));
+  prefs.getString("pgroup", playerGroup, sizeof(playerGroup));
   discoveredMacCount = prefs.getUChar("mac_n", 0);
   if (discoveredMacCount > 8)
     discoveredMacCount = 8;
@@ -868,6 +887,9 @@ void saveState() {
   prefs.putInt("rank", playerRank);
   prefs.putUInt("ach", achievementFlags);
   prefs.putBool("reg", playerRegistered);
+  prefs.putString("pname", playerName);
+  prefs.putString("pcsign", playerCallsign);
+  prefs.putString("pgroup", playerGroup);
   prefs.putUChar("mac_n", discoveredMacCount);
   prefs.putBytes("mac_b", discoveredMacs, discoveredMacCount * 6);
   for (int i = 0; i < 8; i++) {
@@ -929,14 +951,115 @@ int parseIntValue(const String &s, const String &key) {
   return s.substring(start, end).toInt();
 }
 
+String parseStringValue(const String &s, const String &key) {
+  int idx = s.indexOf(key + "=");
+  if (idx < 0)
+    return "";
+  int start = idx + key.length() + 1;
+  int end = s.indexOf(',', start);
+  if (end < 0)
+    end = s.length();
+  String v = s.substring(start, end);
+  v.trim();
+  return v;
+}
+
 void handleSerialConfig(const String &line) {
   if (line.startsWith("STALKER_WHO")) {
     Serial.println("STALKER:PDA:v2.7");
     return;
   }
 
+  if (line.startsWith("CONFIG:UID")) {
+    uint64_t mac = ESP.getEfuseMac();
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)mac);
+    Serial.print("UID:");
+    Serial.println(buf);
+    return;
+  }
+
   if (line.startsWith("CONFIG:REGISTER")) {
-    completeRegistration();
+    String data = "";
+    if (line.startsWith("CONFIG:REGISTER:"))
+      data = line.substring(strlen("CONFIG:REGISTER:"));
+    String nm = parseStringValue(data, "name");
+    String cs = parseStringValue(data, "callsign");
+    String gr = parseStringValue(data, "group");
+    if (cs.length()) {
+      strncpy(playerCallsign, cs.c_str(), sizeof(playerCallsign) - 1);
+      playerCallsign[sizeof(playerCallsign) - 1] = '\0';
+    }
+    if (gr.length()) {
+      strncpy(playerGroup, gr.c_str(), sizeof(playerGroup) - 1);
+      playerGroup[sizeof(playerGroup) - 1] = '\0';
+    }
+    completeRegistration(nm.length() ? nm.c_str() : nullptr);
+    saveState();
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:ADMIT")) {
+    admitPending = false;
+    completeRegistration(nullptr);
+    needFullRedraw = true;
+    setEvent("ДОПУСК В ИГРУ", C_GREEN);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:REVIVE")) {
+    if (playerZombie) {
+      Serial.println("ERROR:ZOMBIE");
+      return;
+    }
+    if (!playerDead) {
+      Serial.println("ERROR:ALIVE");
+      return;
+    }
+    playerDead = false;
+    playerHP = playerMaxHP;
+    playerRad = 0;
+    saveState();
+    needFullRedraw = true;
+    setEvent("СВЯЗЬ ВОССТАНОВЛЕНА", C_GREEN);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:BROADCAST:")) {
+    String text = line.substring(strlen("CONFIG:BROADCAST:"));
+    text.trim();
+    if (text.length() > 47)
+      text = text.substring(0, 47);
+    if (text.length())
+      setEvent(text.c_str(), C_YELLOW);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:EMISSION:")) {
+    String data = line.substring(strlen("CONFIG:EMISSION:"));
+    int timer = parseIntValue(data, "timer");
+    int dur = parseIntValue(data, "duration");
+    char buf[48];
+    snprintf(buf, sizeof(buf), "ВЫБРОС %ds / %ds", timer > 0 ? timer : 0,
+             dur > 0 ? dur : 0);
+    setEvent(buf, C_RED);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:RADIO:")) {
+    String data = line.substring(strlen("CONFIG:RADIO:"));
+    int track = parseIntValue(data, "track");
+    int vol = parseIntValue(data, "vol");
+    if (isAudioReady && track > 0) {
+      if (vol > 0)
+        myDFPlayer.volume(vol > 30 ? 30 : vol);
+      myDFPlayer.playMp3Folder(track);
+    }
     Serial.println("OK");
     return;
   }
@@ -1042,6 +1165,15 @@ void handleSerialConfig(const String &line) {
     Serial.print(playerMoney);
     Serial.print(",deaths=");
     Serial.println(playerDeaths);
+    Serial.print("NAME:");
+    Serial.println(playerName);
+    {
+      uint64_t mac = ESP.getEfuseMac();
+      char buf[20];
+      snprintf(buf, sizeof(buf), "%012llX", (unsigned long long)mac);
+      Serial.print("UID:");
+      Serial.println(buf);
+    }
     return;
   }
 }
@@ -1554,11 +1686,24 @@ void drawScreen() {
     needFullRedraw = false;
   }
 
+  if (!playerRegistered) {
+    tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_YELLOW);
+    printRus(72, 72, "РЕГИСТРАЦИЯ", C_YELLOW);
+    if (playerName[0])
+      printRusStr(60, 110, String(playerName), C_WHITE);
+    else
+      printRus(48, 110, "ПОДКЛЮЧИТЕ ПК", C_LGRAY);
+    return;
+  }
+
   if (admitPending) {
     tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_RED);
     printRus(84, 72, "ОЖИДАНИЕ", C_RED);
     printRus(96, 100, "ДОПУСКА", C_RED);
-    printRus(60, 128, "ДОПУСК В ИГРУ", C_LGRAY);
+    if (playerName[0])
+      printRusStr(60, 128, String(playerName), C_LGRAY);
+    else
+      printRus(60, 128, "ДОПУСК В ИГРУ", C_LGRAY);
     return;
   }
 

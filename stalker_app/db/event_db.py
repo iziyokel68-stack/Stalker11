@@ -1,26 +1,19 @@
 """
 STALKER App — общая база игроков события (SQLite)
 ====================================================
-Схема согласована в docs/PROGRESSION.txt §10.2.
+Схема: docs/PROGRESSION.txt §10.2 + расширения Фазы 4
+(допуск, оповещения, каталог квестов, USB import/export).
 
 Файл на событие: stalker_event_<event_id>.db — переносимый, USB export/import.
-
-Таблицы:
-  events        — одно событие (игровой день/сезон)
-  players       — игроки события, привязка к PDA (pda_uid) опциональна
-  player_stats  — снимок прогресса игрока в конце игры/смены (модуль "Сбор статистики")
-
-Модуль не тянет pygame/tkinter — чистый доступ к данным, чтобы им могли
-пользоваться и модуль регистрации, и модуль статистики, и позже сам
-programmer.py при интеграции.
 """
 
 import csv
 import os
+import shutil
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -41,7 +34,10 @@ CREATE TABLE IF NOT EXISTS players (
     pda_uid       TEXT,
     registered_at REAL,
     registered_by TEXT,
-    notes         TEXT
+    notes         TEXT,
+    admitted_at   REAL,
+    admitted_by   TEXT,
+    status        TEXT DEFAULT 'new'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_players_pda_uid
@@ -61,7 +57,34 @@ CREATE TABLE IF NOT EXISTS player_stats (
     rank_title          TEXT,
     pda_snapshot_json   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS broadcasts (
+    broadcast_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id         TEXT NOT NULL REFERENCES events(event_id),
+    created_at       REAL NOT NULL,
+    author           TEXT,
+    kind             TEXT NOT NULL,
+    target           TEXT NOT NULL,
+    text             TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    serial_response  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS quests (
+    quest_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     TEXT NOT NULL REFERENCES events(event_id),
+    code         TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    body         TEXT,
+    reward_rub   INTEGER NOT NULL DEFAULT 0,
+    hidden       INTEGER NOT NULL DEFAULT 0,
+    created_at   REAL NOT NULL
+);
 """
+
+PLAYER_STATUSES = ("new", "registered", "admitted")
+BROADCAST_KINDS = ("info", "warning", "emission", "radio")
+BROADCAST_STATUSES = ("queued", "sent", "failed")
 
 
 def default_db_path(event_id: str, base_dir: Optional[str] = None) -> str:
@@ -71,6 +94,15 @@ def default_db_path(event_id: str, base_dir: Optional[str] = None) -> str:
 
 def new_event_id() -> str:
     return time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+
+
+def list_event_files(base_dir: str):
+    """Список .db в каталоге событий (новые сверху по имени файла)."""
+    if not os.path.isdir(base_dir):
+        return []
+    files = [f for f in os.listdir(base_dir) if f.endswith(".db")]
+    files.sort(reverse=True)
+    return [os.path.join(base_dir, f) for f in files]
 
 
 @dataclass
@@ -84,6 +116,9 @@ class Player:
     registered_at: Optional[float]
     registered_by: Optional[str]
     notes: Optional[str]
+    admitted_at: Optional[float] = None
+    admitted_by: Optional[str] = None
+    status: str = "new"
 
 
 @dataclass
@@ -102,6 +137,49 @@ class PlayerStat:
     pda_snapshot_json: Optional[str]
 
 
+@dataclass
+class Broadcast:
+    broadcast_id: int
+    event_id: str
+    created_at: float
+    author: Optional[str]
+    kind: str
+    target: str
+    text: str
+    status: str
+    serial_response: Optional[str]
+
+
+@dataclass
+class Quest:
+    quest_id: int
+    event_id: str
+    code: str
+    title: str
+    body: Optional[str]
+    reward_rub: int
+    hidden: int
+    created_at: float
+
+
+def _row_to_player(r) -> Player:
+    keys = set(r.keys())
+    return Player(
+        player_id=r["player_id"],
+        event_id=r["event_id"],
+        name=r["name"],
+        callsign=r["callsign"],
+        group_name=r["group_name"],
+        pda_uid=r["pda_uid"],
+        registered_at=r["registered_at"],
+        registered_by=r["registered_by"],
+        notes=r["notes"],
+        admitted_at=r["admitted_at"] if "admitted_at" in keys else None,
+        admitted_by=r["admitted_by"] if "admitted_by" in keys else None,
+        status=r["status"] if "status" in keys and r["status"] else "new",
+    )
+
+
 class EventDB:
     """Обёртка над SQLite-файлом одного события."""
 
@@ -109,8 +187,21 @@ class EventDB:
         self.path = path
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(players)")}
+        if "admitted_at" not in cols:
+            self.conn.execute("ALTER TABLE players ADD COLUMN admitted_at REAL")
+        if "admitted_by" not in cols:
+            self.conn.execute("ALTER TABLE players ADD COLUMN admitted_by TEXT")
+        if "status" not in cols:
+            self.conn.execute(
+                "ALTER TABLE players ADD COLUMN status TEXT DEFAULT 'new'"
+            )
 
     def close(self):
         self.conn.close()
@@ -137,6 +228,13 @@ class EventDB:
             "SELECT * FROM events ORDER BY created_at DESC"
         ).fetchall()
 
+    def rename_event(self, event_id: str, title: str):
+        self.conn.execute(
+            "UPDATE events SET title=? WHERE event_id=?",
+            (title.strip(), event_id),
+        )
+        self.conn.commit()
+
     def close_event(self, event_id: str):
         self.conn.execute(
             "UPDATE events SET closed_at=? WHERE event_id=?",
@@ -144,15 +242,27 @@ class EventDB:
         )
         self.conn.commit()
 
+    def reopen_event(self, event_id: str):
+        self.conn.execute(
+            "UPDATE events SET closed_at=NULL WHERE event_id=?",
+            (event_id,),
+        )
+        self.conn.commit()
+
+    def is_closed(self, event_id: str) -> bool:
+        row = self.get_event(event_id)
+        return bool(row and row["closed_at"])
+
     # --- players ---------------------------------------------------------
 
     def add_player(self, event_id: str, name: str, callsign: str = "",
-                    group_name: str = "", notes: str = "") -> int:
+                   group_name: str = "", notes: str = "") -> int:
         cur = self.conn.execute(
             "INSERT INTO players(event_id, name, callsign, group_name, "
-            "pda_uid, registered_at, registered_by, notes) "
-            "VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)",
-            (event_id, name.strip(), callsign.strip(), group_name.strip(), notes.strip()),
+            "pda_uid, registered_at, registered_by, notes, status) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, 'new')",
+            (event_id, name.strip(), callsign.strip(), group_name.strip(),
+             notes.strip()),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -160,8 +270,11 @@ class EventDB:
     def update_player(self, player_id: int, **fields):
         if not fields:
             return
-        allowed = {"name", "callsign", "group_name", "notes", "pda_uid",
-                   "registered_at", "registered_by"}
+        allowed = {
+            "name", "callsign", "group_name", "notes", "pda_uid",
+            "registered_at", "registered_by", "admitted_at", "admitted_by",
+            "status",
+        }
         cols = [k for k in fields if k in allowed]
         if not cols:
             return
@@ -179,39 +292,110 @@ class EventDB:
             pda_uid=pda_uid.strip(),
             registered_at=time.time(),
             registered_by=registered_by.strip(),
+            status="registered",
         )
 
+    def mark_registered(self, player_id: int, registered_by: str = "master",
+                        pda_uid: Optional[str] = None) -> None:
+        fields = {
+            "registered_at": time.time(),
+            "registered_by": registered_by,
+            "status": "registered",
+        }
+        if pda_uid:
+            fields["pda_uid"] = pda_uid.strip()
+        self.update_player(player_id, **fields)
+
+    def mark_admitted(self, player_id: int, admitted_by: str = "master") -> None:
+        p = self.get_player(player_id)
+        status = "admitted"
+        fields = {
+            "admitted_at": time.time(),
+            "admitted_by": admitted_by,
+            "status": status,
+        }
+        if p and not p.registered_at:
+            fields["registered_at"] = time.time()
+            fields["registered_by"] = admitted_by
+        self.update_player(player_id, **fields)
+
     def delete_player(self, player_id: int):
-        self.conn.execute("DELETE FROM players WHERE player_id=?", (player_id,))
         self.conn.execute("DELETE FROM player_stats WHERE player_id=?", (player_id,))
+        self.conn.execute("DELETE FROM players WHERE player_id=?", (player_id,))
         self.conn.commit()
 
-    def list_players(self, event_id: str):
+    def list_players(self, event_id: str, query: str = "", group_name: str = ""):
+        sql = "SELECT * FROM players WHERE event_id=?"
+        args = [event_id]
+        if group_name.strip():
+            sql += " AND group_name=?"
+            args.append(group_name.strip())
+        sql += " ORDER BY player_id"
+        rows = self.conn.execute(sql, args).fetchall()
+        players = [_row_to_player(r) for r in rows]
+        q = query.strip().casefold()
+        if q:
+            def _hit(p):
+                blob = " ".join(filter(None, [
+                    p.name, p.callsign, p.group_name, p.pda_uid, p.notes,
+                ])).casefold()
+                return q in blob
+            players = [p for p in players if _hit(p)]
+        return players
+
+    def list_groups(self, event_id: str):
         rows = self.conn.execute(
-            "SELECT * FROM players WHERE event_id=? ORDER BY player_id",
+            "SELECT DISTINCT group_name FROM players "
+            "WHERE event_id=? AND group_name IS NOT NULL AND group_name!='' "
+            "ORDER BY group_name",
             (event_id,),
         ).fetchall()
-        return [Player(**{k: r[k] for k in r.keys()}) for r in rows]
+        return [r[0] for r in rows]
+
+    def player_counts(self, event_id: str) -> dict:
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM players WHERE event_id=?", (event_id,)
+        ).fetchone()[0]
+        registered = self.conn.execute(
+            "SELECT COUNT(*) FROM players WHERE event_id=? AND status IN "
+            "('registered','admitted')",
+            (event_id,),
+        ).fetchone()[0]
+        admitted = self.conn.execute(
+            "SELECT COUNT(*) FROM players WHERE event_id=? AND status='admitted'",
+            (event_id,),
+        ).fetchone()[0]
+        bound = self.conn.execute(
+            "SELECT COUNT(*) FROM players WHERE event_id=? AND pda_uid IS NOT NULL "
+            "AND pda_uid!=''",
+            (event_id,),
+        ).fetchone()[0]
+        return {
+            "total": total,
+            "registered": registered,
+            "admitted": admitted,
+            "bound": bound,
+        }
 
     def get_player(self, player_id: int):
         r = self.conn.execute(
             "SELECT * FROM players WHERE player_id=?", (player_id,)
         ).fetchone()
-        return Player(**{k: r[k] for k in r.keys()}) if r else None
+        return _row_to_player(r) if r else None
 
     def find_by_pda_uid(self, event_id: str, pda_uid: str):
         r = self.conn.execute(
             "SELECT * FROM players WHERE event_id=? AND pda_uid=?",
             (event_id, pda_uid),
         ).fetchone()
-        return Player(**{k: r[k] for k in r.keys()}) if r else None
+        return _row_to_player(r) if r else None
 
     # --- player_stats ------------------------------------------------------
 
     def record_stat(self, player_id: int, event_id: str, *, level=None, xp=None,
-                     money_rub=None, deaths=None, cheat_shield_count=None,
-                     achievements_json=None, rank_title=None,
-                     pda_snapshot_json=None) -> int:
+                    money_rub=None, deaths=None, cheat_shield_count=None,
+                    achievements_json=None, rank_title=None,
+                    pda_snapshot_json=None) -> int:
         cur = self.conn.execute(
             "INSERT INTO player_stats(player_id, event_id, collected_at, level, "
             "xp, money_rub, deaths, cheat_shield_count, achievements_json, "
@@ -237,18 +421,100 @@ class EventDB:
         ).fetchall()
         return [PlayerStat(**{k: r[k] for k in r.keys()}) for r in rows]
 
-    # --- export -----------------------------------------------------------
+    # --- broadcasts --------------------------------------------------------
+
+    def add_broadcast(self, event_id: str, text: str, *, kind: str = "info",
+                      target: str = "all", author: str = "master",
+                      status: str = "queued", serial_response: str = "") -> int:
+        kind = kind if kind in BROADCAST_KINDS else "info"
+        status = status if status in BROADCAST_STATUSES else "queued"
+        cur = self.conn.execute(
+            "INSERT INTO broadcasts(event_id, created_at, author, kind, target, "
+            "text, status, serial_response) VALUES (?,?,?,?,?,?,?,?)",
+            (event_id, time.time(), author, kind, target or "all",
+             text.strip(), status, serial_response or None),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_broadcast(self, broadcast_id: int, **fields):
+        allowed = {"status", "serial_response"}
+        cols = [k for k in fields if k in allowed]
+        if not cols:
+            return
+        set_clause = ", ".join(f"{c}=?" for c in cols)
+        values = [fields[c] for c in cols] + [broadcast_id]
+        self.conn.execute(
+            f"UPDATE broadcasts SET {set_clause} WHERE broadcast_id=?", values
+        )
+        self.conn.commit()
+
+    def list_broadcasts(self, event_id: str, limit: int = 200):
+        rows = self.conn.execute(
+            "SELECT * FROM broadcasts WHERE event_id=? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (event_id, limit),
+        ).fetchall()
+        return [Broadcast(**{k: r[k] for k in r.keys()}) for r in rows]
+
+    # --- quests ------------------------------------------------------------
+
+    def add_quest(self, event_id: str, code: str, title: str, body: str = "",
+                  reward_rub: int = 0, hidden: bool = False) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO quests(event_id, code, title, body, reward_rub, hidden, "
+            "created_at) VALUES (?,?,?,?,?,?,?)",
+            (event_id, code.strip(), title.strip(), body.strip(),
+             int(reward_rub), 1 if hidden else 0, time.time()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_quest(self, quest_id: int, **fields):
+        allowed = {"code", "title", "body", "reward_rub", "hidden"}
+        cols = [k for k in fields if k in allowed]
+        if not cols:
+            return
+        set_clause = ", ".join(f"{c}=?" for c in cols)
+        values = [fields[c] for c in cols] + [quest_id]
+        self.conn.execute(
+            f"UPDATE quests SET {set_clause} WHERE quest_id=?", values
+        )
+        self.conn.commit()
+
+    def delete_quest(self, quest_id: int):
+        self.conn.execute("DELETE FROM quests WHERE quest_id=?", (quest_id,))
+        self.conn.commit()
+
+    def list_quests(self, event_id: str):
+        rows = self.conn.execute(
+            "SELECT * FROM quests WHERE event_id=? ORDER BY hidden, code, quest_id",
+            (event_id,),
+        ).fetchall()
+        return [Quest(**{k: r[k] for k in r.keys()}) for r in rows]
+
+    def get_quest(self, quest_id: int):
+        r = self.conn.execute(
+            "SELECT * FROM quests WHERE quest_id=?", (quest_id,)
+        ).fetchone()
+        return Quest(**{k: r[k] for k in r.keys()}) if r else None
+
+    # --- export / import ---------------------------------------------------
 
     def export_players_csv(self, event_id: str, csv_path: str):
         players = self.list_players(event_id)
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(["player_id", "name", "callsign", "group_name",
-                        "pda_uid", "registered_at", "registered_by", "notes"])
+                        "pda_uid", "status", "registered_at", "registered_by",
+                        "admitted_at", "admitted_by", "notes"])
             for p in players:
-                w.writerow([p.player_id, p.name, p.callsign or "", p.group_name or "",
-                            p.pda_uid or "", p.registered_at or "",
-                            p.registered_by or "", p.notes or ""])
+                w.writerow([
+                    p.player_id, p.name, p.callsign or "", p.group_name or "",
+                    p.pda_uid or "", p.status,
+                    p.registered_at or "", p.registered_by or "",
+                    p.admitted_at or "", p.admitted_by or "", p.notes or "",
+                ])
 
     def export_stats_csv(self, event_id: str, csv_path: str):
         players_by_id = {p.player_id: p for p in self.list_players(event_id)}
@@ -260,7 +526,36 @@ class EventDB:
                         "cheat_shield_count", "rank_title"])
             for s in stats:
                 p = players_by_id.get(s.player_id)
-                w.writerow([s.player_id, p.name if p else "", p.callsign if p else "",
-                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s.collected_at)),
-                            s.level, s.xp, s.money_rub, s.deaths,
-                            s.cheat_shield_count, s.rank_title or ""])
+                w.writerow([
+                    s.player_id, p.name if p else "", p.callsign if p else "",
+                    time.strftime("%Y-%m-%d %H:%M:%S",
+                                  time.localtime(s.collected_at)),
+                    s.level, s.xp, s.money_rub, s.deaths,
+                    s.cheat_shield_count, s.rank_title or "",
+                ])
+
+    def export_quests_csv(self, event_id: str, csv_path: str):
+        quests = self.list_quests(event_id)
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["code", "title", "body", "reward_rub", "hidden"])
+            for q in quests:
+                w.writerow([q.code, q.title, q.body or "", q.reward_rub,
+                            "1" if q.hidden else "0"])
+
+    def export_db_copy(self, dest_path: str):
+        self.conn.commit()
+        shutil.copy2(self.path, dest_path)
+
+    @staticmethod
+    def import_db_copy(src_path: str, dest_dir: str) -> str:
+        os.makedirs(dest_dir, exist_ok=True)
+        name = os.path.basename(src_path)
+        if not name.endswith(".db"):
+            name += ".db"
+        dest = os.path.join(dest_dir, name)
+        if os.path.exists(dest):
+            stem, ext = os.path.splitext(name)
+            dest = os.path.join(dest_dir, f"{stem}_imported_{new_event_id()}{ext}")
+        shutil.copy2(src_path, dest)
+        return dest

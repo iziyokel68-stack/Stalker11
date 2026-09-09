@@ -1,0 +1,414 @@
+"""
+USB Serial к устройствам STALKER (ESP32).
+================================================
+Handshake: PC → STALKER_WHO  /  ESP → STALKER:TYPE:ver[,role=…]
+
+Эталон команд ПДА (USB, не LoRa):
+  CONFIG:REGISTER:name=…,callsign=…,group=…
+  CONFIG:ADMIT / CONFIG:REVIVE / CONFIG:RANK_CONFIRM
+  CONFIG:BROADCAST:<текст>
+  CONFIG:EMISSION:timer=N,duration=N
+  CONFIG:RADIO:track=N,vol=N
+  CONFIG:UID / CONFIG_READ / CONFIG:FUNC: / CONFIG:PRESET:
+
+Модуль без pygame — его импортируют и программатор, и приложение мастера.
+"""
+
+import time
+import threading
+
+try:
+    import serial
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except ImportError:
+    serial = None
+    SERIAL_AVAILABLE = False
+
+DEVICE_TYPE_MAP = {
+    "CHIP_BOX": 0,
+    "ANOMALY": 1,
+    "SAFE_ZONE": 2,
+    "PDA": 3,
+    "TERMINAL": 4,
+    "CASHIER": 4,
+}
+
+
+def list_port_names():
+    """Имена живых COM/tty-портов (пусто, если pyserial нет)."""
+    if not SERIAL_AVAILABLE:
+        return []
+    return [p.device for p in serial.tools.list_ports.comports()]
+
+
+class SerialLink:
+    """Управляет Serial-соединением с устройством."""
+    BAUD = 115200
+    TIMEOUT = 1.5
+    BOOT_WAIT = 4.0
+    HANDSHAKE_WAIT = 2.5
+
+    def __init__(self):
+        self.port = None
+        self.ser = None
+        self.dev_type = None
+        self.dev_ver = None
+        self.terminal_role = None
+        self.scanning = False
+        self.last_error = ""
+        self._lock = threading.Lock()
+
+    @property
+    def connected(self):
+        return self.ser is not None and self.ser.is_open
+
+    def disconnect(self):
+        with self._lock:
+            if self.ser is not None:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+            self.ser = None
+            self.port = None
+            self.dev_type = None
+            self.dev_ver = None
+            self.terminal_role = None
+            self.last_error = ""
+
+    def _parse_who_line(self, line):
+        parts = line.split(":", 2)
+        if len(parts) < 2:
+            return None, None, None
+        dtype = parts[1].strip()
+        if dtype not in DEVICE_TYPE_MAP:
+            return None, None, None
+        rest = parts[2] if len(parts) > 2 else "?"
+        ver = rest.split(",")[0].strip() or "?"
+        role = None
+        for token in rest.split(","):
+            token = token.strip()
+            if token.startswith("role="):
+                role = token.split("=", 1)[1].strip()
+        return dtype, ver, role
+
+    def _read_terminal_role(self, s):
+        try:
+            s.reset_input_buffer()
+            s.write(b"TERMINAL_ROLE\n")
+            deadline = time.time() + self.TIMEOUT
+            while time.time() < deadline:
+                line = s.readline().decode(errors="ignore").strip()
+                if line.startswith("TERMINAL_ROLE:"):
+                    return line.split(":", 1)[1].split(",")[0].strip()
+                if line.startswith("OK:TERMINAL_ROLE:"):
+                    return line.split(":", 2)[2].split(",")[0].strip()
+        except Exception:
+            pass
+        return None
+
+    def _finish_handshake(self, s, line, boot_role=None):
+        dtype, ver, role = self._parse_who_line(line)
+        if not dtype:
+            return None
+        if not role and boot_role:
+            role = boot_role
+        if dtype == "TERMINAL" and not role:
+            role = self._read_terminal_role(s)
+        return dtype, ver, role
+
+    def _wait_stalker_who(self, s, boot_role=None):
+        deadline = time.time() + self.HANDSHAKE_WAIT
+        while time.time() < deadline:
+            line = s.readline().decode(errors="ignore").strip()
+            if not line:
+                continue
+            if line.startswith("STALKER:"):
+                parsed = self._finish_handshake(s, line, boot_role)
+                if parsed:
+                    return parsed
+        if boot_role:
+            return "TERMINAL", "v1", boot_role
+        return None
+
+    def _try_port(self, portname):
+        try:
+            s = serial.Serial(portname, self.BAUD, timeout=0.2)
+            time.sleep(0.2)
+            s.reset_input_buffer()
+
+            boot_role = None
+            boot_end = time.time() + self.BOOT_WAIT
+            while time.time() < boot_end:
+                line = s.readline().decode(errors="ignore").strip()
+                if not line:
+                    continue
+                if line.startswith("TERMINAL_ROLE:"):
+                    boot_role = line.split(":", 1)[1].split(",")[0].strip()
+                elif line.startswith("STALKER:"):
+                    parsed = self._finish_handshake(s, line, boot_role)
+                    if parsed:
+                        return s, *parsed
+                elif line == "READY" or line.endswith(" READY"):
+                    break
+
+            s.write(b"STALKER_WHO\n")
+            parsed = self._wait_stalker_who(s, boot_role)
+            if parsed:
+                return s, *parsed
+            s.close()
+        except Exception:
+            pass
+        return None, None, None, None
+
+    def connect_sync(self, target_port="AUTO"):
+        if not SERIAL_AVAILABLE:
+            self.last_error = "pyserial не установлен"
+            return False
+        if self.connected:
+            self.disconnect()
+        ports = (list_port_names() if target_port == "AUTO" else [target_port])
+        for p in ports:
+            s, dtype, dver, role = self._try_port(p)
+            if s:
+                self.ser = s
+                self.port = p
+                self.dev_type = dtype
+                self.dev_ver = dver
+                self.terminal_role = role
+                self.last_error = ""
+                return True
+        self.last_error = "Устройство не найдено"
+        return False
+
+    def scan(self, target_port="AUTO"):
+        if self.scanning:
+            return
+
+        def _worker():
+            self.scanning = True
+            with self._lock:
+                if self.connected:
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+                self.dev_type = None
+                self.port = None
+                self.terminal_role = None
+
+            ports = list_port_names() if target_port == "AUTO" else [target_port]
+            for p in ports:
+                s, dtype, dver, role = self._try_port(p)
+                if s:
+                    with self._lock:
+                        self.ser = s
+                        self.port = p
+                        self.dev_type = dtype
+                        self.dev_ver = dver
+                        self.terminal_role = role
+                    self.scanning = False
+                    return
+            self.scanning = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def send(self, cmd: str):
+        if not self.connected:
+            return False
+        try:
+            with self._lock:
+                self.ser.write((cmd + "\n").encode("utf-8"))
+            return True
+        except Exception:
+            self.ser = None
+            return False
+
+    def query(self, cmd: str, timeout=2.0):
+        if not self.send(cmd):
+            return None
+        try:
+            self.ser.timeout = timeout
+            return self.ser.readline().decode(errors="ignore").strip()
+        except Exception:
+            return None
+
+    def query_lines(self, cmd: str, timeout=2.0):
+        """Отправить команду и собрать несколько строк ответа (CONFIG_READ)."""
+        if not self.send(cmd):
+            return []
+        lines = []
+        deadline = time.time() + timeout
+        try:
+            self.ser.timeout = 0.12
+            while time.time() < deadline:
+                line = self.ser.readline().decode(errors="ignore").strip()
+                if line:
+                    lines.append(line)
+                elif lines:
+                    break
+        except Exception:
+            pass
+        return lines
+
+    def query_ok(self, cmd: str, timeout=2.0):
+        """True, если ответ начинается с OK (или равен OK)."""
+        resp = self.query(cmd, timeout=timeout)
+        if resp and (resp == "OK" or resp.startswith("OK")):
+            self.last_error = ""
+            return True, resp
+        self.last_error = resp or "Нет ответа"
+        return False, resp
+
+    def read_config(self):
+        resp = self.query("CONFIG_READ")
+        if not resp or not resp.startswith("CONFIG:"):
+            lines = [resp] if resp else []
+            extra = self.query_lines("CONFIG_READ") if not resp else []
+            blob = " ".join(x for x in (lines + extra) if x)
+            result = {}
+            for token in blob.replace(" ", ",").split(","):
+                if "=" in token:
+                    k, v = token.split("=", 1)
+                    k = k.split(":")[-1].strip()
+                    try:
+                        result[k] = int(v)
+                    except ValueError:
+                        result[k] = v
+            return result or None
+        result = {}
+        for token in resp[7:].split(","):
+            if "=" in token:
+                k, v = token.split("=", 1)
+                try:
+                    result[k.strip()] = int(v)
+                except ValueError:
+                    result[k.strip()] = v
+        return result
+
+    def read_pda_snapshot(self):
+        """Разобрать многострочный CONFIG_READ ПДА → dict."""
+        lines = self.query_lines("CONFIG_READ", timeout=2.5)
+        snap = {"raw": lines}
+        for line in lines:
+            if ":" in line:
+                prefix, rest = line.split(":", 1)
+                prefix = prefix.strip().upper()
+            else:
+                prefix, rest = "", line
+            for token in rest.split(","):
+                if "=" not in token:
+                    continue
+                k, v = token.split("=", 1)
+                key = k.strip()
+                if prefix and key.lower() not in ("flags",):
+                    pass
+                try:
+                    snap[key.strip()] = int(v.strip())
+                except ValueError:
+                    snap[key.strip()] = v.strip()
+            if line.startswith("UID:"):
+                snap["uid"] = line.split(":", 1)[1].strip()
+            if line.startswith("NAME:"):
+                snap["name"] = line.split(":", 1)[1].strip()
+        uid_line = self.query("CONFIG:UID", timeout=1.5)
+        if uid_line and uid_line.startswith("UID:"):
+            snap["uid"] = uid_line.split(":", 1)[1].strip()
+        return snap
+
+    def write_config(self, cfg_str: str):
+        if not self.send(f"CONFIG_WRITE:{cfg_str}"):
+            self.last_error = "Порт закрыт"
+            return False
+        try:
+            self.ser.timeout = 0.3
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                line = self.ser.readline().decode(errors="ignore").strip()
+                if not line:
+                    continue
+                if line.startswith("OK:WRITTEN") or line == "OK":
+                    self.last_error = ""
+                    return True
+                if line.startswith("ERROR:"):
+                    self.last_error = line
+                    return False
+            self.last_error = "Нет ответа OK:WRITTEN (таймаут)"
+            return False
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def txn_start(self, amount: int, item_id: int = 0, txn_id: int = 0):
+        cmd = f"TXN_START:amount={amount},item={item_id}"
+        if txn_id > 0:
+            cmd += f",txn_id={txn_id}"
+        return self.query(cmd, timeout=3.0)
+
+    def txn_status(self):
+        return self.query("TXN_STATUS", timeout=2.0)
+
+    def txn_wait(self, timeout_ms: int = 30000):
+        return self.query(f"TXN_WAIT:timeout_ms={timeout_ms}",
+                          timeout=timeout_ms / 1000.0 + 3.0)
+
+    def txn_reset(self):
+        return self.query("TXN_RESET", timeout=2.0)
+
+    def terminal_role_set(self, role: str):
+        resp = self.query(f"TERMINAL_ROLE:{role}", timeout=2.0)
+        if resp and resp.startswith("OK:TERMINAL_ROLE:"):
+            self.terminal_role = role
+            return True, resp
+        return False, resp
+
+    def terminal_role_get(self):
+        resp = self.query("TERMINAL_ROLE", timeout=2.0)
+        if resp and resp.startswith("TERMINAL_ROLE:"):
+            role = resp.split(":", 1)[1].split(",")[0].strip()
+            self.terminal_role = role
+            return role
+        return self.terminal_role
+
+    def status_text(self):
+        if self.scanning:
+            return "[..] Поиск..."
+        if self.connected:
+            extra = f" role={self.terminal_role}" if self.terminal_role else ""
+            return f"[OK] {self.port}  [{self.dev_type} {self.dev_ver}{extra}]"
+        return "[X]  Не подключено"
+
+    def status_color(self):
+        if self.scanning:
+            return (200, 200, 80)
+        if self.connected:
+            return (80, 220, 120)
+        return (180, 80, 80)
+
+
+def build_register_cmd(name: str, callsign: str = "", group: str = "") -> str:
+    """CONFIG:REGISTER:name=… — канон §9.6 / §10.2."""
+    parts = [f"name={_sanitize_field(name)}"]
+    if callsign.strip():
+        parts.append(f"callsign={_sanitize_field(callsign)}")
+    if group.strip():
+        parts.append(f"group={_sanitize_field(group)}")
+    return "CONFIG:REGISTER:" + ",".join(parts)
+
+
+def build_broadcast_cmd(text: str) -> str:
+    return "CONFIG:BROADCAST:" + (text or "").replace("\n", " ").strip()[:80]
+
+
+def build_emission_cmd(timer_sec: int, duration_sec: int) -> str:
+    return f"CONFIG:EMISSION:timer={int(timer_sec)},duration={int(duration_sec)}"
+
+
+def build_radio_cmd(track: int, volume: int = 0) -> str:
+    return f"CONFIG:RADIO:track={int(track)},vol={int(volume)}"
+
+
+def _sanitize_field(value: str) -> str:
+    return (value or "").replace(",", " ").replace("\n", " ").strip()[:24]

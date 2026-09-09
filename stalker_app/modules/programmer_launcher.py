@@ -1,8 +1,8 @@
 """
-STALKER App — запуск модуля «Программатор» (docs/PROGRESSION.txt §10.3 Фаза 1)
-==================================================================================
-programmer.py остаётся отдельным pygame-процессом без изменений — оболочка
-только запускает его тем же интерпретатором и не блокирует главное меню.
+STALKER App — запуск модуля «Программатор»
+==========================================
+programmer.py остаётся pygame-процессом. Перед запуском приложение
+освобождает COM (shared/serial_session.py).
 """
 
 import os
@@ -22,21 +22,33 @@ def is_running() -> bool:
     return _current_process is not None and _current_process.poll() is None
 
 
-def launch_programmer():
-    """Запустить programmer.py как отдельный процесс (subprocess).
-
-    Возвращает (ok: bool, message: str).
-    """
+def launch_programmer(serial_session=None):
+    """Запустить programmer.py. Возвращает (ok: bool, message: str)."""
     global _current_process
     if is_running():
         return False, "Программатор уже запущен"
     if not os.path.isfile(PROGRAMMER_SCRIPT):
         return False, f"Не найден {PROGRAMMER_SCRIPT}"
+    if serial_session is not None:
+        serial_session.release_for_programmer()
     try:
         _current_process = subprocess.Popen(
             [sys.executable, PROGRAMMER_SCRIPT],
             cwd=PROGRAMMER_DIR,
         )
     except Exception as exc:
+        if serial_session is not None:
+            serial_session.programmer_closed()
         return False, f"Не удалось запустить: {exc}"
-    return True, "Программатор запущен в отдельном окне"
+    return True, "Программатор запущен в отдельном окне (чипы, аномалии, убежища, ПДА, терминалы)"
+
+
+def poll_programmer(serial_session=None):
+    """Если процесс программатора завершился — вернуть COM приложению."""
+    global _current_process
+    if _current_process is None:
+        return
+    if _current_process.poll() is not None:
+        _current_process = None
+        if serial_session is not None:
+            serial_session.programmer_closed()

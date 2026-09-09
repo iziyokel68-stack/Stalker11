@@ -1,67 +1,86 @@
 """
 STALKER App — модуль «Регистрация» (docs/PROGRESSION.txt §10.1, §10.3 Фаза 2)
 ================================================================================
-Список игроков события, форма добавления/редактирования, экспорт в CSV.
-
-Привязка PDA (bind_pda) заложена в EventDB уже сейчас — по канону будет
-делаться через слот EEPROM/общий чип после основной прошивки (см. §9.6);
-поле pda_uid можно проставить и вручную, пока нет проводного сценария.
+Список участников события, запись имени на ПДА (CONFIG:REGISTER), допуск.
 """
 
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from db.event_db import EventDB
+from theme import module_header
+
+
+STATUS_LABEL = {
+    "new": "новый",
+    "registered": "зарегистрирован",
+    "admitted": "допущен",
+}
+
+
+def _fmt_ts(ts):
+    if not ts:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
 
 
 class RegistrationFrame(ttk.Frame):
-    def __init__(self, master, db: EventDB, event_id: str, on_back=None):
+    def __init__(self, master, db: EventDB, event_id: str, serial=None, on_back=None):
         super().__init__(master)
         self.db = db
         self.event_id = event_id
+        self.serial = serial
         self.on_back = on_back
         self.selected_player_id = None
-
         self._build_ui()
         self.refresh()
 
-    # ------------------------------------------------------------------
-
     def _build_ui(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=8)
+        module_header(self, "Регистрация и список участников", self.on_back)
 
-        ttk.Label(top, text="Регистрация игроков", font=("Segoe UI", 14, "bold")).pack(side="left")
-        if self.on_back:
-            ttk.Button(top, text="← Меню", command=self.on_back).pack(side="right")
+        filt = ttk.Frame(self)
+        filt.pack(fill="x", padx=12, pady=(0, 6))
+        ttk.Label(filt, text="Поиск").pack(side="left")
+        self.var_query = tk.StringVar()
+        ent = ttk.Entry(filt, textvariable=self.var_query, width=28)
+        ent.pack(side="left", padx=6)
+        ent.bind("<KeyRelease>", lambda _e: self.refresh())
+        ttk.Label(filt, text="Группа").pack(side="left", padx=(12, 0))
+        self.var_group_filter = tk.StringVar()
+        self.cmb_group = ttk.Combobox(filt, textvariable=self.var_group_filter,
+                                      width=16, state="readonly")
+        self.cmb_group.pack(side="left", padx=6)
+        self.cmb_group.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
+        ttk.Button(filt, text="Сброс фильтра", command=self._reset_filter).pack(
+            side="left", padx=6)
+        self.lbl_count = ttk.Label(filt, text="", style="Dim.TLabel")
+        self.lbl_count.pack(side="right")
 
         body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
-        # --- список игроков -------------------------------------------------
-        list_frame = ttk.LabelFrame(body, text="Игроки события")
+        list_frame = ttk.LabelFrame(body, text="Участники")
         list_frame.pack(side="left", fill="both", expand=True)
 
-        columns = ("id", "name", "callsign", "group", "pda_uid", "registered")
+        columns = ("id", "name", "callsign", "group", "pda_uid", "status")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=18)
         headers = {
             "id": "#", "name": "Имя", "callsign": "Позывной",
-            "group": "Группа", "pda_uid": "PDA UID", "registered": "Допуск",
+            "group": "Группа", "pda_uid": "PDA UID", "status": "Статус",
         }
-        widths = {"id": 40, "name": 140, "callsign": 110, "group": 100,
-                  "pda_uid": 120, "registered": 90}
+        widths = {"id": 40, "name": 150, "callsign": 110, "group": 100,
+                  "pda_uid": 130, "status": 130}
         for c in columns:
             self.tree.heading(c, text=headers[c])
             self.tree.column(c, width=widths[c], anchor="w")
         self.tree.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
-
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscroll=scroll.set)
         scroll.pack(side="left", fill="y")
 
-        # --- форма ------------------------------------------------------
-        form = ttk.LabelFrame(body, text="Данные игрока")
+        form = ttk.LabelFrame(body, text="Карточка игрока")
         form.pack(side="left", fill="y", padx=(10, 0))
 
         self.var_name = tk.StringVar()
@@ -70,7 +89,7 @@ class RegistrationFrame(ttk.Frame):
         self.var_pda_uid = tk.StringVar()
         self.var_notes = tk.StringVar()
 
-        def row(label, var, width=24):
+        def row(label, var, width=26):
             r = ttk.Frame(form)
             r.pack(fill="x", padx=8, pady=4)
             ttk.Label(r, text=label, width=12).pack(side="left")
@@ -81,34 +100,66 @@ class RegistrationFrame(ttk.Frame):
         row("Группа", self.var_group)
         row("PDA UID", self.var_pda_uid)
         row("Заметки", self.var_notes)
+        self.lbl_status = ttk.Label(form, text="Статус: новый", style="Dim.TLabel")
+        self.lbl_status.pack(anchor="w", padx=8, pady=(4, 8))
 
-        btns = ttk.Frame(form)
-        btns.pack(fill="x", padx=8, pady=(10, 4))
-        ttk.Button(btns, text="Добавить", command=self._add_player).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Сохранить изменения", command=self._save_player).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Привязать PDA (вручную)", command=self._bind_pda).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Удалить", command=self._delete_player).pack(fill="x", pady=2)
-        ttk.Button(btns, text="Очистить форму", command=self._clear_form).pack(fill="x", pady=2)
+        ttk.Button(form, text="Добавить в список", command=self._add_player).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Сохранить изменения", command=self._save_player).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Привязать UID вручную", command=self._bind_pda).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Считать UID с ПДА", command=self._read_uid).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Записать на ПДА (USB)", style="Accent.TButton",
+                   command=self._write_pda).pack(fill="x", padx=8, pady=(10, 2))
+        ttk.Button(form, text="Допуск в игру (USB)", command=self._admit_pda).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Допуск только в базе", command=self._admit_db).pack(
+            fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Удалить", style="Danger.TButton",
+                   command=self._delete_player).pack(fill="x", padx=8, pady=(10, 2))
+        ttk.Button(form, text="Очистить форму", command=self._clear_form).pack(
+            fill="x", padx=8, pady=2)
 
         ttk.Separator(form).pack(fill="x", padx=8, pady=8)
-        ttk.Button(form, text="Экспорт CSV (игроки)", command=self._export_csv).pack(fill="x", padx=8, pady=2)
+        ttk.Button(form, text="Экспорт CSV (игроки)", command=self._export_csv).pack(
+            fill="x", padx=8, pady=2)
 
-        note = ("Привязка PDA сейчас — вручную (UID).\n"
-                "После основной прошивки — через слот\n"
-                "и общий EEPROM-чип (см. §9.6, ROADMAP §4.2).")
-        ttk.Label(form, text=note, foreground="#666", justify="left",
-                  font=("Segoe UI", 8)).pack(fill="x", padx=8, pady=(10, 4))
+        note = (
+            "Поток: добавить игрока → подключить ПДА USB →\n"
+            "«Записать на ПДА» (CONFIG:REGISTER) →\n"
+            "«Допуск в игру» (CONFIG:ADMIT).\n"
+            "Без железа UID и допуск можно проставить вручную."
+        )
+        ttk.Label(form, text=note, style="Dim.TLabel", justify="left").pack(
+            fill="x", padx=8, pady=(10, 8))
 
-    # ------------------------------------------------------------------
+    def _reset_filter(self):
+        self.var_query.set("")
+        self.var_group_filter.set("")
+        self.refresh()
 
     def refresh(self):
+        groups = [""] + self.db.list_groups(self.event_id)
+        self.cmb_group["values"] = groups
         for i in self.tree.get_children():
             self.tree.delete(i)
-        for p in self.db.list_players(self.event_id):
+        players = self.db.list_players(
+            self.event_id,
+            query=self.var_query.get(),
+            group_name=self.var_group_filter.get(),
+        )
+        for p in players:
             self.tree.insert("", "end", iid=str(p.player_id), values=(
                 p.player_id, p.name, p.callsign or "", p.group_name or "",
-                p.pda_uid or "", "да" if p.pda_uid else "нет",
+                p.pda_uid or "", STATUS_LABEL.get(p.status, p.status),
             ))
+        counts = self.db.player_counts(self.event_id)
+        self.lbl_count.configure(
+            text=f"всего {counts['total']}  ·  рег. {counts['registered']}  ·  "
+                 f"допуск {counts['admitted']}"
+        )
 
     def _on_select(self, _evt=None):
         sel = self.tree.selection()
@@ -124,18 +175,28 @@ class RegistrationFrame(ttk.Frame):
         self.var_group.set(p.group_name or "")
         self.var_pda_uid.set(p.pda_uid or "")
         self.var_notes.set(p.notes or "")
+        extra = []
+        if p.registered_at:
+            extra.append("рег. " + _fmt_ts(p.registered_at))
+        if p.admitted_at:
+            extra.append("допуск " + _fmt_ts(p.admitted_at))
+        self.lbl_status.configure(
+            text="Статус: " + STATUS_LABEL.get(p.status, p.status)
+            + (("  ·  " + ", ".join(extra)) if extra else "")
+        )
 
     def _clear_form(self):
         self.selected_player_id = None
         for v in (self.var_name, self.var_callsign, self.var_group,
                   self.var_pda_uid, self.var_notes):
             v.set("")
+        self.lbl_status.configure(text="Статус: новый")
         self.tree.selection_remove(self.tree.selection())
 
     def _add_player(self):
         name = self.var_name.get().strip()
         if not name:
-            messagebox.showwarning("Регистрация", "Укажите имя игрока")
+            messagebox.showwarning("Регистрация", "Укажите имя игрока", parent=self)
             return
         self.db.add_player(
             self.event_id, name,
@@ -148,11 +209,11 @@ class RegistrationFrame(ttk.Frame):
 
     def _save_player(self):
         if self.selected_player_id is None:
-            messagebox.showinfo("Регистрация", "Выберите игрока в списке")
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
         name = self.var_name.get().strip()
         if not name:
-            messagebox.showwarning("Регистрация", "Имя не может быть пустым")
+            messagebox.showwarning("Регистрация", "Имя не может быть пустым", parent=self)
             return
         self.db.update_player(
             self.selected_player_id,
@@ -165,24 +226,100 @@ class RegistrationFrame(ttk.Frame):
 
     def _bind_pda(self):
         if self.selected_player_id is None:
-            messagebox.showinfo("Регистрация", "Выберите игрока в списке")
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
         uid = self.var_pda_uid.get().strip()
         if not uid:
-            messagebox.showwarning("Регистрация", "Укажите PDA UID")
+            messagebox.showwarning("Регистрация", "Укажите PDA UID", parent=self)
             return
         try:
             self.db.bind_pda(self.selected_player_id, uid, registered_by="master")
         except Exception as exc:
-            messagebox.showerror("Регистрация", f"Не удалось привязать PDA: {exc}")
+            messagebox.showerror("Регистрация", f"Не удалось привязать PDA: {exc}",
+                                 parent=self)
             return
         self.refresh()
+        self._on_select()
+
+    def _read_uid(self):
+        if self.serial is None:
+            messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
+            return
+        uid, msg = self.serial.read_uid()
+        if not uid:
+            messagebox.showerror("Регистрация", f"UID не считан: {msg}", parent=self)
+            return
+        self.var_pda_uid.set(uid)
+        if self.selected_player_id is not None:
+            try:
+                self.db.bind_pda(self.selected_player_id, uid, registered_by="usb")
+            except Exception as exc:
+                messagebox.showerror("Регистрация", str(exc), parent=self)
+                return
+            self.refresh()
+            self._on_select()
+        messagebox.showinfo("Регистрация", f"UID: {uid}", parent=self)
+
+    def _write_pda(self):
+        if self.selected_player_id is None:
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
+            return
+        if self.serial is None:
+            messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
+            return
+        p = self.db.get_player(self.selected_player_id)
+        ok, resp, uid = self.serial.register_player(
+            p.name, p.callsign or "", p.group_name or ""
+        )
+        if not ok:
+            messagebox.showerror(
+                "Регистрация",
+                "ПДА не принял CONFIG:REGISTER.\n"
+                f"{resp}\n\nИмя сохранено в базе; запись на железо — когда ПДА на USB.",
+                parent=self,
+            )
+            self.db.mark_registered(self.selected_player_id, registered_by="master")
+            self.refresh()
+            return
+        self.db.mark_registered(
+            self.selected_player_id, registered_by="usb", pda_uid=uid
+        )
+        if uid:
+            self.var_pda_uid.set(uid)
+        self.refresh()
+        self._on_select()
+        messagebox.showinfo("Регистрация", f"Имя записано на ПДА.\n{resp}", parent=self)
+
+    def _admit_pda(self):
+        if self.selected_player_id is None:
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
+            return
+        if self.serial is None:
+            messagebox.showwarning("Регистрация", "Serial-сессия недоступна", parent=self)
+            return
+        ok, resp = self.serial.admit()
+        if not ok:
+            messagebox.showerror("Допуск", f"CONFIG:ADMIT не прошёл:\n{resp}", parent=self)
+            return
+        self.db.mark_admitted(self.selected_player_id, admitted_by="usb")
+        self.refresh()
+        self._on_select()
+        messagebox.showinfo("Допуск", f"Допуск снят на ПДА.\n{resp}", parent=self)
+
+    def _admit_db(self):
+        if self.selected_player_id is None:
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
+            return
+        self.db.mark_admitted(self.selected_player_id, admitted_by="master")
+        self.refresh()
+        self._on_select()
 
     def _delete_player(self):
         if self.selected_player_id is None:
-            messagebox.showinfo("Регистрация", "Выберите игрока в списке")
+            messagebox.showinfo("Регистрация", "Выберите игрока в списке", parent=self)
             return
-        if not messagebox.askyesno("Удаление", "Удалить игрока и его статистику?"):
+        if not messagebox.askyesno("Удаление", "Удалить игрока и его статистику?",
+                                   parent=self):
             return
         self.db.delete_player(self.selected_player_id)
         self._clear_form()
@@ -194,8 +331,9 @@ class RegistrationFrame(ttk.Frame):
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
             initialfile="players.csv",
+            parent=self,
         )
         if not path:
             return
         self.db.export_players_csv(self.event_id, path)
-        messagebox.showinfo("Экспорт", f"Сохранено: {path}")
+        messagebox.showinfo("Экспорт", f"Сохранено: {path}", parent=self)

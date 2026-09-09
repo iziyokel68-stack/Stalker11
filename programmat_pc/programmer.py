@@ -17,7 +17,6 @@ import json
 import os
 import sys
 import time
-import threading
 
 from eeprom_txn import (
     TXN_STATE_IDLE, TXN_STATE_PENDING, TXN_STATE_PROCESSING,
@@ -25,14 +24,9 @@ from eeprom_txn import (
     TXN_RESULT_OK, TXN_RESULT_INSUFFICIENT_FUNDS, TXN_RESULT_LEVEL_TOO_LOW,
     TXN_RESULT_SYSTEM_LOCKED, TXN_RESULT_BAD_CRC, TXN_RESULT_BAD_MAGIC,
 )
-
-# pyserial — опциональная зависимость
-try:
-    import serial
-    import serial.tools.list_ports
-    SERIAL_AVAILABLE = True
-except ImportError:
-    SERIAL_AVAILABLE = False
+from serial_link import (
+    SerialLink, SERIAL_AVAILABLE, DEVICE_TYPE_MAP, list_port_names,
+)
 
 TXN_STATE_NAMES = {
     TXN_STATE_IDLE: "IDLE",
@@ -135,287 +129,8 @@ def has_txn_wait(dev_type):
 def has_terminal_role(dev_type):
     return dev_type == "TERMINAL"
 
-# ─────────────────────────────────────────────────────────────
-#  SERIAL-СОЕДИНЕНИЕ
-# ─────────────────────────────────────────────────────────────
-# Страница GUI для типа ESP (handshake STALKER:TYPE:v1). Пользователь может
-# переключить вкладку вручную — автопереход только один раз при подключении.
-DEVICE_TYPE_MAP = {
-    "CHIP_BOX": 0,   # программатор чипов → ЧИП
-    "ANOMALY":  1,
-    "SAFE_ZONE":2,
-    "PDA":      3,
-    "TERMINAL": 4,   # касса / банкомат / квест / допуск / банк
-    "CASHIER":  4,   # legacy firmware ID → ТЕРМИНАЛ
-}
-
-class SerialLink:
-    """Управляет Serial-соединением с устройством."""
-    BAUD = 115200
-    TIMEOUT = 1.5          # сек на query()
-    BOOT_WAIT = 4.0        # ждём READY после ресета ESP32
-    HANDSHAKE_WAIT = 2.5   # ждём ответ на STALKER_WHO
-
-    def __init__(self):
-        self.port       = None   # str, напр. "COM3"
-        self.ser        = None   # serial.Serial объект
-        self.dev_type   = None   # str: "ANOMALY" / "CHIP_BOX" / ...
-        self.dev_ver    = None   # str: "v1"
-        self.terminal_role = None  # str: STORE / ATM / ... (TERMINAL only)
-        self.scanning   = False
-        self.last_error = ""
-        self._lock      = threading.Lock()
-
-    @property
-    def connected(self):
-        return self.ser is not None and self.ser.is_open
-
-    def _parse_who_line(self, line):
-        """Разобрать STALKER:TYPE:ver,... → (dtype, ver, role_or_none)."""
-        parts = line.split(":", 2)
-        if len(parts) < 2:
-            return None, None, None
-        dtype = parts[1].strip()
-        if dtype not in DEVICE_TYPE_MAP:
-            return None, None, None
-        rest = parts[2] if len(parts) > 2 else "?"
-        ver = rest.split(",")[0].strip() or "?"
-        role = None
-        for token in rest.split(","):
-            token = token.strip()
-            if token.startswith("role="):
-                role = token.split("=", 1)[1].strip()
-        return dtype, ver, role
-
-    def _read_terminal_role(self, s):
-        """Запросить TERMINAL_ROLE после handshake."""
-        try:
-            s.reset_input_buffer()
-            s.write(b"TERMINAL_ROLE\n")
-            deadline = time.time() + self.TIMEOUT
-            while time.time() < deadline:
-                line = s.readline().decode(errors="ignore").strip()
-                if line.startswith("TERMINAL_ROLE:"):
-                    return line.split(":", 1)[1].split(",")[0].strip()
-                if line.startswith("OK:TERMINAL_ROLE:"):
-                    return line.split(":", 2)[2].split(",")[0].strip()
-        except Exception:
-            pass
-        return None
-
-    def _finish_handshake(self, s, line, boot_role=None):
-        """Разобрать STALKER:... и дополнить роль терминала при необходимости."""
-        dtype, ver, role = self._parse_who_line(line)
-        if not dtype:
-            return None
-        if not role and boot_role:
-            role = boot_role
-        if dtype == "TERMINAL" and not role:
-            role = self._read_terminal_role(s)
-        return dtype, ver, role
-
-    def _wait_stalker_who(self, s, boot_role=None):
-        """Прочитать ответ на STALKER_WHO (или идентификацию из boot-баннера)."""
-        deadline = time.time() + self.HANDSHAKE_WAIT
-        while time.time() < deadline:
-            line = s.readline().decode(errors="ignore").strip()
-            if not line:
-                continue
-            if line.startswith("STALKER:"):
-                parsed = self._finish_handshake(s, line, boot_role)
-                if parsed:
-                    return parsed
-        if boot_role:
-            return "TERMINAL", "v1", boot_role
-        return None
-
-    def _try_port(self, portname):
-        """Открыть порт, дождаться READY, послать STALKER_WHO, вернуть тип или None."""
-        try:
-            s = serial.Serial(portname, self.BAUD, timeout=0.2)
-            time.sleep(0.2)   # линия ресета после open()
-            s.reset_input_buffer()
-
-            boot_role = None
-            boot_end = time.time() + self.BOOT_WAIT
-            while time.time() < boot_end:
-                line = s.readline().decode(errors="ignore").strip()
-                if not line:
-                    continue
-                if line.startswith("TERMINAL_ROLE:"):
-                    boot_role = line.split(":", 1)[1].split(",")[0].strip()
-                elif line.startswith("STALKER:"):
-                    parsed = self._finish_handshake(s, line, boot_role)
-                    if parsed:
-                        return s, *parsed
-                elif line == "READY" or line.endswith(" READY"):
-                    break
-
-            s.write(b"STALKER_WHO\n")
-            parsed = self._wait_stalker_who(s, boot_role)
-            if parsed:
-                return s, *parsed
-            s.close()
-        except Exception:
-            pass
-        return None, None, None, None
-
-    def connect_sync(self, target_port="AUTO"):
-        """Синхронное подключение (для CLI)."""
-        if not SERIAL_AVAILABLE:
-            return False
-        if self.connected:
-            self.ser.close()
-            self.ser = None
-        ports = ([p.device for p in serial.tools.list_ports.comports()]
-                 if target_port == "AUTO" else [target_port])
-        for p in ports:
-            s, dtype, dver, role = self._try_port(p)
-            if s:
-                self.ser = s
-                self.port = p
-                self.dev_type = dtype
-                self.dev_ver = dver
-                self.terminal_role = role
-                return True
-        return False
-
-    def scan(self, target_port="AUTO"):
-        """Запустить поиск в фоновом потоке."""
-        if self.scanning:
-            return
-        def _worker():
-            self.scanning = True
-            with self._lock:
-                if self.connected:
-                    self.ser.close()
-                    self.ser = None
-                self.dev_type = None
-                self.port = None
-                self.terminal_role = None
-
-            if target_port == "AUTO":
-                ports = [p.device for p in serial.tools.list_ports.comports()]
-            else:
-                ports = [target_port]
-
-            for p in ports:
-                s, dtype, dver, role = self._try_port(p)
-                if s:
-                    with self._lock:
-                        self.ser      = s
-                        self.port     = p
-                        self.dev_type = dtype
-                        self.dev_ver  = dver
-                        self.terminal_role = role
-                    self.scanning = False
-                    return
-            self.scanning = False
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def send(self, cmd: str):
-        """Отправить строку (\n добавляется автоматически)."""
-        if not self.connected:
-            return False
-        try:
-            with self._lock:
-                self.ser.write((cmd + "\n").encode())
-            return True
-        except Exception:
-            self.ser = None
-            return False
-
-    def query(self, cmd: str, timeout=2.0):
-        """Отправить команду и дождаться ответа."""
-        if not self.send(cmd):
-            return None
-        try:
-            self.ser.timeout = timeout
-            return self.ser.readline().decode(errors="ignore").strip()
-        except Exception:
-            return None
-
-    def read_config(self):
-        """Прочитать конфиг с устройства и вернуть dict."""
-        resp = self.query("CONFIG_READ")
-        if not resp or not resp.startswith("CONFIG:"):
-            return None
-        result = {}
-        for token in resp[7:].split(","):
-            if "=" in token:
-                k, v = token.split("=", 1)
-                try: result[k.strip()] = int(v)
-                except: result[k.strip()] = v
-        return result
-
-    def write_config(self, cfg_str: str):
-        """Отправить CONFIG_WRITE. Успех: OK / OK:WRITTEN:... Пропускает INFO: и баннер."""
-        if not self.send(f"CONFIG_WRITE:{cfg_str}"):
-            self.last_error = "Порт закрыт"
-            return False
-        try:
-            self.ser.timeout = 0.3
-            deadline = time.time() + 8.0
-            while time.time() < deadline:
-                line = self.ser.readline().decode(errors="ignore").strip()
-                if not line:
-                    continue
-                if line.startswith("OK:WRITTEN") or line == "OK":
-                    self.last_error = ""
-                    return True
-                if line.startswith("ERROR:"):
-                    self.last_error = line
-                    return False
-            self.last_error = "Нет ответа OK:WRITTEN (таймаут)"
-            return False
-        except Exception as exc:
-            self.last_error = str(exc)
-            return False
-
-    def txn_start(self, amount: int, item_id: int = 0, txn_id: int = 0):
-        cmd = f"TXN_START:amount={amount},item={item_id}"
-        if txn_id > 0:
-            cmd += f",txn_id={txn_id}"
-        return self.query(cmd, timeout=3.0)
-
-    def txn_status(self):
-        return self.query("TXN_STATUS", timeout=2.0)
-
-    def txn_wait(self, timeout_ms: int = 30000):
-        return self.query(f"TXN_WAIT:timeout_ms={timeout_ms}",
-                          timeout=timeout_ms / 1000.0 + 3.0)
-
-    def txn_reset(self):
-        return self.query("TXN_RESET", timeout=2.0)
-
-    def terminal_role_set(self, role: str):
-        resp = self.query(f"TERMINAL_ROLE:{role}", timeout=2.0)
-        if resp and resp.startswith("OK:TERMINAL_ROLE:"):
-            self.terminal_role = role
-            return True, resp
-        return False, resp
-
-    def terminal_role_get(self):
-        resp = self.query("TERMINAL_ROLE", timeout=2.0)
-        if resp and resp.startswith("TERMINAL_ROLE:"):
-            role = resp.split(":", 1)[1].split(",")[0].strip()
-            self.terminal_role = role
-            return role
-        return self.terminal_role
-
-    def status_text(self):
-        if self.scanning:
-            return "[..] Поиск..."
-        if self.connected:
-            return f"[OK] {self.port}  [{self.dev_type} {self.dev_ver}]"
-        return "[X]  Не подключено"
-
-    def status_color(self):
-        if self.scanning:   return (200, 200, 80)
-        if self.connected:  return (80, 220, 120)
-        return (180, 80, 80)
-
+# SerialLink / DEVICE_TYPE_MAP — programmat_pc/serial_link.py
+# (общий модуль для программатора и приложения мастера).
 
 def run_txn_cli():
     parser = argparse.ArgumentParser(description="STALKER cashier EEPROM TXN CLI")
@@ -579,8 +294,7 @@ def get_com_ports():
     static = [f"COM{i}" for i in range(1, 33)]
     if not SERIAL_AVAILABLE:
         return ["AUTO"] + static
-    live = sorted({p.device for p in serial.tools.list_ports.comports()},
-                  key=_com_sort_key)
+    live = sorted(set(list_port_names()), key=_com_sort_key)
     ports = ["AUTO"]
     for name in live + static:
         if name not in ports:
@@ -1206,7 +920,7 @@ def build_config_str():
             flags = state.get("pda_func_flags", 0xFF)  # все включены по умолчанию
             return f"CONFIG:FUNC:flags={flags}"
         else:  # ПРЕСЕТ: начальные данные
-            # TODO Фаза 5/7: CONFIG:REGISTER:name=... — запись имени сталкера в NVS (режим регистрации ПК)
+            # Имя сталкера пишет модуль Регистрация (stalker_app): CONFIG:REGISTER:name=…
             bp = state.get("pda_base_prot", [0]*8)
             if len(bp) < 8: bp = (bp + [0]*8)[:8]
             prot_s = ",".join(f"r{i}={max(0,min(100,int(bp[i])))}" for i in range(8))

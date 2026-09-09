@@ -1,48 +1,40 @@
 """
 STALKER App — модуль «Сбор статистики» (docs/PROGRESSION.txt §10.1, §10.3 Фаза 3)
-====================================================================================
-Съём снимка по игроку (уровень, XP, деньги, смерти, cheat_shield_count) в конце
-игры/смены и сводный экспорт CSV.
-
-Съём с реального ПДА (Serial) — по канону через слот/EEPROM после боевой
-прошивки (ROADMAP §4.3). Сейчас снимок вводится мастером вручную — форма
-готова принять те же поля, что появятся при автосъёме.
 """
 
 import json
+import time as _time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from db.event_db import EventDB
+from theme import module_header
 
 
 class StatsFrame(ttk.Frame):
-    def __init__(self, master, db: EventDB, event_id: str, on_back=None):
+    def __init__(self, master, db: EventDB, event_id: str, serial=None, on_back=None):
         super().__init__(master)
         self.db = db
         self.event_id = event_id
+        self.serial = serial
         self.on_back = on_back
         self.selected_player_id = None
-
         self._build_ui()
         self.refresh_players()
 
-    # ------------------------------------------------------------------
-
     def _build_ui(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=8)
-        ttk.Label(top, text="Сбор статистики", font=("Segoe UI", 14, "bold")).pack(side="left")
-        if self.on_back:
-            ttk.Button(top, text="← Меню", command=self.on_back).pack(side="right")
+        module_header(self, "Сбор статистики", self.on_back)
 
         body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
         left = ttk.LabelFrame(body, text="Игрок")
         left.pack(side="left", fill="y")
-
-        self.player_list = tk.Listbox(left, width=28, height=18, exportselection=False)
+        self.player_list = tk.Listbox(
+            left, width=28, height=18, exportselection=False,
+            bg="#252732", fg="#e6e6ea", highlightthickness=0, borderwidth=0,
+            selectbackground="#4a3710",
+        )
         self.player_list.pack(padx=6, pady=6, fill="y")
         self.player_list.bind("<<ListboxSelect>>", self._on_select_player)
         self._player_ids = []
@@ -72,10 +64,17 @@ class StatsFrame(ttk.Frame):
 
         ttk.Button(mid, text="Записать снимок", command=self._record_stat).pack(
             fill="x", padx=8, pady=(10, 4))
+        ttk.Button(mid, text="Снять с ПДА (USB CONFIG_READ)",
+                   command=self._pull_pda).pack(fill="x", padx=8, pady=2)
+        ttk.Label(
+            mid,
+            text="Автосъём с админ-чипа «Сохранение» — после боевой прошивки.\n"
+                 "USB CONFIG_READ заполняет поля, если ПДА на кабеле.",
+            style="Dim.TLabel", justify="left",
+        ).pack(anchor="w", padx=8, pady=(8, 4))
 
         right = ttk.LabelFrame(body, text="История снимков события")
         right.pack(side="left", fill="both", expand=True, padx=(10, 0))
-
         columns = ("time", "name", "level", "xp", "money", "deaths", "shield")
         self.tree = ttk.Treeview(right, columns=columns, show="headings", height=18)
         headers = {"time": "Время", "name": "Игрок", "level": "Ур.",
@@ -86,11 +85,8 @@ class StatsFrame(ttk.Frame):
             self.tree.heading(c, text=headers[c])
             self.tree.column(c, width=widths[c], anchor="w")
         self.tree.pack(fill="both", expand=True, padx=6, pady=6)
-
         ttk.Button(right, text="Экспорт CSV (статистика)", command=self._export_csv).pack(
             fill="x", padx=6, pady=(0, 6))
-
-    # ------------------------------------------------------------------
 
     def refresh_players(self):
         self.player_list.delete(0, "end")
@@ -128,9 +124,9 @@ class StatsFrame(ttk.Frame):
         except ValueError:
             return None
 
-    def _record_stat(self):
+    def _record_stat(self, snapshot_json=None):
         if self.selected_player_id is None:
-            messagebox.showinfo("Статистика", "Выберите игрока в списке")
+            messagebox.showinfo("Статистика", "Выберите игрока в списке", parent=self)
             return
         self.db.record_stat(
             self.selected_player_id, self.event_id,
@@ -140,9 +136,30 @@ class StatsFrame(ttk.Frame):
             deaths=self._int_or_none(self.var_deaths.get()),
             cheat_shield_count=self._int_or_none(self.var_shield.get()),
             rank_title=self.var_rank.get().strip() or None,
+            pda_snapshot_json=snapshot_json,
         )
         self._refresh_history()
-        messagebox.showinfo("Статистика", "Снимок записан")
+        messagebox.showinfo("Статистика", "Снимок записан", parent=self)
+
+    def _pull_pda(self):
+        if self.serial is None:
+            messagebox.showwarning("Статистика", "Serial недоступен", parent=self)
+            return
+        snap, msg = self.serial.read_snapshot()
+        if not snap:
+            messagebox.showerror("Статистика", f"Не удалось считать ПДА: {msg}",
+                                 parent=self)
+            return
+        if "lvl" in snap:
+            self.var_level.set(str(snap["lvl"]))
+        if "xp" in snap:
+            self.var_xp.set(str(snap["xp"]))
+        if "money" in snap:
+            self.var_money.set(str(snap["money"]))
+        if "deaths" in snap:
+            self.var_deaths.set(str(snap["deaths"]))
+        blob = json.dumps(snap, ensure_ascii=False, default=str)
+        self._record_stat(snapshot_json=blob)
 
     def _refresh_history(self):
         for i in self.tree.get_children():
@@ -151,7 +168,6 @@ class StatsFrame(ttk.Frame):
         for s in self.db.list_stats(self.event_id):
             p = players_by_id.get(s.player_id)
             name = p.name if p else "?"
-            import time as _time
             t = _time.strftime("%H:%M:%S", _time.localtime(s.collected_at))
             self.tree.insert("", "end", values=(
                 t, name, s.level or "", s.xp or "", s.money_rub or "",
@@ -164,8 +180,9 @@ class StatsFrame(ttk.Frame):
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv")],
             initialfile="stats.csv",
+            parent=self,
         )
         if not path:
             return
         self.db.export_stats_csv(self.event_id, path)
-        messagebox.showinfo("Экспорт", f"Сохранено: {path}")
+        messagebox.showinfo("Экспорт", f"Сохранено: {path}", parent=self)

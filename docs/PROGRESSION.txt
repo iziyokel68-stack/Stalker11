@@ -433,7 +433,7 @@ O03 | zero_deaths_day | Ни шагу назад      | Игровой день 
 # Полигон: опц. тот же корпус в режиме REGISTER или только ПК — TBD.
 # [x] CONFIG:REGISTER обработчик в PDA_ESP32.ino (база)
 # [x] Достижение A02 reg_complete (§7)
-# [ ] Модуль Регистрация в STALKER App (§10 фаза 2)
+# [x] Модуль Регистрация в STALKER App (§10 фаза 2)
 # [ ] Порядок REGISTER → ADMIT на КПП (раздельно или один сценарий)
 # [ ] Расширение CONFIG: callsign, group → NVS
 
@@ -504,24 +504,28 @@ O03 | zero_deaths_day | Ни шагу назад      | Игровой день 
 #
 # Фаза 2 — Регистрация
 #   [x] UI: список игроков, форма, «Привязать PDA» (stalker_app/modules/registration.py)
-#   [ ] ПДА в слоте ПК; CONFIG:REGISTER + player_id в БД — после боевой прошивки, слот + общий EEPROM-чип (§9.6); сейчас pda_uid вводится вручную
+#   [x] USB CONFIG:REGISTER:name=… + CONFIG:UID + CONFIG:ADMIT (PDA_ESP32.ino); EEPROM-чип слота — §9.6, позже
 #   [x] Создание/выбор event_id, новая .db (stalker_app/db/event_db.py, stalker_app/events/)
-#   [ ] USB экспорт/импорт БД между ноутбуками (сейчас — CSV экспорт игроков/статистики; кобирование .db вручную)
+#   [x] USB экспорт/импорт .db между ноутбуками + CSV игроков/статистики
 #   [ ] Согласование с терминалом на полигоне (§9.3)
-#   Критерий: новый игрок → БД → имя на ПДА → допуск в игру (без связи с железом — готово; с железом — после боевой прошивки)
+#   Критерий: новый игрок → БД → имя на ПДА → допуск в игру (USB-путь готов; полевой терминал REGISTER — позже)
 #
 # Фаза 3 — Сбор статистики
-#   [ ] Автосъём с ПДА (Serial/EEPROM): уровень, XP, деньги, смерти, достижения, cheat_shield_count — сейчас снимок вводит мастер вручную
+#   [x] Съём с ПДА по USB (CONFIG_READ) в форму снимка; EEPROM-чип «Сохранение» — позже
 #   [x] Запись player_stats; отчёты CSV (stalker_app/modules/stats.py, EventDB.export_stats_csv)
-#   [ ] events.closed_at в UI (поле в схеме есть, закрытие события в UI не добавлено)
+#   [x] events.closed_at в UI (дашборд события)
 #   [ ] Отображение cheat_shield_count для мастера на самом ПДА (без HP-штрафа) — прошивка, вне скопа этого модуля
-#   Критерий: сводка по игрокам после игры с флешки или локальной БД — выполнено (вручной ввод)
+#   Критерий: сводка по игрокам после игры с флешки или локальной БД — выполнено
 #
-# Фаза 4 — Глобальное сообщение и карта (см. §11) — заглушки в меню есть (stalker_app/modules/stub.py), протокол не согласован
+# Фаза 4 — Глобальное сообщение и карта (см. §11)
+#   [x] UI оповещений + журнал (broadcast.py); USB CONFIG:BROADCAST/EMISSION/RADIO
+#   [ ] LoRa Мастер-Пульт (полевая доставка)
+#   [x] Заглушка карты с местом под якоря UWB (mapview.py)
 
 # --- 10.4. programmat_pc — текущее и целевое ---
 # Текущее:
-#   programmer.py      — UI pygame + Serial + прошивка (~2000 строк)
+#   serial_link.py     — SerialLink, команды CONFIG:* (общий с stalker_app)
+#   programmer.py      — UI pygame + Serial + прошивка
 #   protocol.py        — ChipType, CmdSub
 #   game_logic.py      — ACHIEVEMENTS, ранги, симуляция Player
 #   eeprom_txn.py      — TXN-блок EEPROM
@@ -529,18 +533,17 @@ O03 | zero_deaths_day | Ни шагу назад      | Игровой день 
 #
 # Интеграция (поэтапно):
 #   Subprocess (фаза 1) — launcher вызывает programmer.py; минимальный риск
-#   Импорт + рефакторинг (фаза 2+) — run_programmer(screen), один процесс
-#   Общий пакет — регистрация/статистика импортируют Serial/EEPROM из programmat_pc/
+#   [x] shared/serial_session.py — mutex COM: приложение отпускает порт перед programmer.py
+#   Импорт pygame в один процесс — не делаем (два event loop)
 #
-# Целевая схема (фаза 2+):
-#   stalker_app/main.py, db/event_db.py, modules/registration|stats|programmer/
-#   shared/serial_session.py — mutex COM между модулями
+# Целевая схема:
+#   stalker_app/main.py, db/event_db.py, modules/registration|stats|broadcast|quests|commands
 #   Не дублировать: STALKER_WHO, CONFIG:*, TXN, достижения — programmat_pc/ + StalkerCommon/
 #
 # Связь с прошивкой ПДА:
-#   [x] CONFIG:REGISTER в PDA_ESP32.ino (обработчик есть)
-#   [ ] Расширение полей callsign/group — фаза 5 ROADMAP.md
-#   [ ] TODO programmer.py ~1174: запись имени → модуль Регистрация
+#   [x] CONFIG:REGISTER:name=/callsign=/group= → NVS playerName
+#   [x] CONFIG:ADMIT / CONFIG:REVIVE / CONFIG:BROADCAST / CONFIG:UID
+#   [x] Запись имени — модуль Регистрация, не programmer.py
 
 # --- 10.5. Вне скоупа (сейчас) ---
 # Полный дизайн UI / брендинг окон
@@ -559,11 +562,13 @@ O03 | zero_deaths_day | Ни шагу назад      | Игровой день 
 # Доступ по уровню: ур.50+ (§4) — платная услуга, протокол TBD.
 #
 # Глобальное сообщение:
-#   [ ] UI ввода текста в приложении STALKER (§10)
+#   [x] UI ввода текста в приложении STALKER (§10) — stalker_app/modules/broadcast.py
+#   [x] USB-стенд: CONFIG:BROADCAST / CONFIG:EMISSION / CONFIG:RADIO
 #   [ ] Доставка: Мастер-Пульт → LoRa → ПДА (не через терминалы STORE/ATM)
 #   [ ] Связь с ROADMAP.md ФАЗА 5.7 (терминалы и мастерские инструменты)
 #
 # Карта локации:
+#   [x] Пункт меню + схема-заглушка (якоря / ЗЗ / аномалии / КПП)
 #   [ ] Схема полигона, якоря UWB, зоны безопасности — для мастеров на ПК
 #   [ ] Возможная связь с UWB-калибровкой (ROADMAP.md фаза 5.5)
 #   [ ] Отдельная спецификация после стабилизации фаз 2–3 (§10.3)

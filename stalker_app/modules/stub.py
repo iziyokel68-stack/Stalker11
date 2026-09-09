@@ -1,6 +1,7 @@
 """
-STALKER App — заглушки модулей, чей протокол ещё не согласован
-(docs/PROGRESSION.txt §11: Глобальное сообщение, Карта локации).
+STALKER App — устаревшие заглушки.
+Глобальное сообщение → modules/broadcast.py
+Карта → modules/mapview.py
 """
 
 import tkinter as tk
