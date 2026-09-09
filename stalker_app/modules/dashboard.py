@@ -55,7 +55,7 @@ class DashboardFrame(ttk.Frame):
         for i, (key, label) in enumerate((
             ("total", "Игроков"),
             ("new", "Новых"),
-            ("registered", "На мосту"),
+            ("registered", "Зарегистрировано"),
             ("admitted", "Допущено"),
         )):
             card = ttk.LabelFrame(stats, text=label)
