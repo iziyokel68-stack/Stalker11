@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S.T.A.L.K.E.R. PDA Schematic</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    body {
+      background: #060a12;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px;
+      gap: 8px;
+      font-family: 'JetBrains Mono', monospace
+    }
+
+    h1 {
+      font-size: 1rem;
+      background: linear-gradient(90deg, #e87c20, #f5c842);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 2px
+    }
+
+    .legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      font-size: .6rem;
+      color: #667
+    }
+
+    .legend span {
+      display: flex;
+      align-items: center;
+      gap: 3px
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block
+    }
+
+    svg {
+      width: 100%;
+      height: 100vh;
+      cursor: grab;
+    }
+
+    svg:active {
+      cursor: grabbing;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>ESP32-S3-N16R8 Pinout + Buses</h1>
+  <div class="legend">
+    <span><span class="dot" style="background:#ffffff;border:1.5px solid #111"></span>GND</span>
+    <span><span class="dot" style="background:#ff9922"></span>UART</span>
+    <span><span class="dot" style="background:#cc88ff"></span>BU03</span>
+    <span><span class="dot" style="background:#cc2222"></span>Strap</span>
+    <span><span class="dot" style="background:#ffdd44"></span>Switch in</span>
+    <span style="color:#998822;font-size:11px;margin-left:8px">TFT LED → 3V3 (всегда ON); G37/G38 — свободны; G4-G7 — кнопки без назначения</span>
+  </div>
+  <svg id="s" viewBox="-50 0 1600 1300" xmlns="http://www.w3.org/2000/svg"></svg>
+
+  <script>
+
+    const C = {
+      pwr: '#cc3333', gnd: '#ffffff', rst: '#888',
+      btn: '#44ee66', ok: '#ff8844', sw: '#ffdd44',
+      uart: '#ff9922', i2c: '#44ccaa', spi: '#ffcc00',
+      strap: '#666666', free: '#1e2e40',
+      led_g: '#33dd55', led_r: '#ff4444', vib: '#aaaaaa',
+      v5: '#ff7700'
+    };
+    const LEFT = [
+      ['3V3', C.pwr, ''],
+      ['3V3', C.pwr, ''],
+      ['RST', C.rst, ''],
+      ['G4', C.free, ''],       // free (кнопка 1, без назначения)
+      ['G5', C.free, ''],       // free (кнопка 2, без назначения)
+      ['G6', C.free, ''],       // free (кнопка 3, без назначения)
+      ['G7', C.free, ''],       // free (кнопка 4, без назначения)
+      ['G15', C.led_r, ''],     // LED
+      ['G16', C.led_g, ''],     // LED
+      ['G17', C.uart, ''],
+      ['G18', C.uart, ''],
+      ['G8', C.i2c, ''],        // SCL
+      ['G3', C.strap, ''],
+      ['G46', C.strap, ''],
+      ['G9', C.i2c, ''],        // SDA
+      ['G10', C.spi, ''],        // TFT CS
+      ['G11', C.spi, ''],        // TFT DC
+      ['G12', '#ffaa44', ''],    // Shared RST (TFT+LoRa)
+      ['G13', C.spi, ''],        // SPI SCK shared
+      ['G14', C.spi, ''],        // SPI MOSI/SDI shared
+      ['5Vin', C.v5, ''],
+      ['GND', C.gnd, ''],
+    ];
+    const RIGHT = [
+      ['GND', C.gnd, ''],
+      ['TX', C.strap, ''],
+      ['RX', C.strap, ''],
+      ['G1', C.uart, ''],        // BU03 RX ← PA2(TX)
+      ['G2', C.uart, ''],        // BU03 TX → RX
+      ['G42', '#cc88ff', ''],    // BU03_PWR (P-MOS)
+      ['G41', '#4488ff', ''],    // LoRa DIO0
+      ['G40', C.spi, ''],        // SPI MISO shared
+      ['G39', '#4488ff', ''],    // LoRa CS
+      ['G38', C.free, ''],      // free
+      ['G37', C.free, ''],      // free
+      ['G36', C.strap, ''],
+      ['G35', C.strap, ''],
+      ['G0', C.strap, ''],
+      ['G45', C.strap, ''],
+      ['G48', C.sw, 'VIB'],
+      ['G47', C.sw, 'SND'],
+      ['G21', C.vib, ''],
+      ['G20', C.strap, ''],
+      ['G19', C.strap, ''],
+      ['GND', C.gnd, ''],
+      ['GND', C.gnd, ''],
+    ];
+    const PCB_X = 502, PCB_Y = 62, PCB_W = 214, PCB_H = 506;
+    const PIN_XL = 489;           // left pin dot x
+    const PIN_XR = 719;           // right pin dot x
+    const PIN_Y0 = 72;            // first pin y
+    const PIN_DY = 22;            // pin step
+    const LBAR_X = 476, LBAR_W = 13; // left header bar
+    const RBAR_X = 723, RBAR_W = 13; // right header bar
+    const BUS_3V3_Y = 10;         // 3V3 bus y (верхняя шина питания)
+    const BUS_GND_Y = 680;        // GND bus y
+    const BUS_5V_X = 28;         // 5V bus x (vertical, left side)
+    const BUS_X1 = 28, BUS_X2 = 1375; // bus horizontal extent
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.getElementById('s');
+
+    function el(tag, attrs, text) {
+      const e = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+      if (text !== undefined) e.textContent = text;
+      svg.appendChild(e);
+      return e;
+    }
+    el('line', { x1: BUS_X1, y1: BUS_3V3_Y, x2: BUS_X2, y2: BUS_3V3_Y, stroke: '#ff4444', 'stroke-width': 3 });
+    el('text', { x: BUS_X1 + 4, y: BUS_3V3_Y - 6, fill: '#ff6666', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold' }, '3V3 BUS');
+    el('line', { x1: BUS_X1, y1: BUS_GND_Y, x2: BUS_X2, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 3 });
+    el('text', { x: BUS_X1 + 4, y: BUS_GND_Y + 12, fill: '#778', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold' }, 'GND BUS');
+    const pcbGrad = el('defs', {});
+    const lg = document.createElementNS(NS, 'linearGradient');
+    lg.setAttribute('id', 'gPcb'); lg.setAttribute('x1', '0'); lg.setAttribute('y1', '0'); lg.setAttribute('x2', '0'); lg.setAttribute('y2', '1');
+    const s1 = document.createElementNS(NS, 'stop'); s1.setAttribute('offset', '0%'); s1.setAttribute('stop-color', '#0c1c0e');
+    const s2 = document.createElementNS(NS, 'stop'); s2.setAttribute('offset', '100%'); s2.setAttribute('stop-color', '#071009');
+    lg.appendChild(s1); lg.appendChild(s2); pcbGrad.appendChild(lg); svg.appendChild(pcbGrad);
+
+    el('rect', { x: PCB_X, y: PCB_Y, width: PCB_W, height: PCB_H, rx: 8, fill: 'url(#gPcb)', stroke: '#1a3a1a', 'stroke-width': 1.5 });
+
+    const CX = PCB_X + PCB_W / 2; // center X of PCB
+    el('text', { x: CX, y: PCB_Y - 9, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#3a6a3a' }, 'Антенна');
+    el('line', { x1: CX, y1: PCB_Y - 4, x2: CX, y2: PCB_Y + 4, stroke: '#3a6a3a', 'stroke-width': 1 });
+    const USBC_Y = PCB_Y + PCB_H + 2;
+    el('rect', { x: CX - 60, y: USBC_Y, width: 52, height: 12, rx: 3, fill: '#0e0e0e', stroke: '#334', 'stroke-width': 1 });
+    el('text', { x: CX, y: USBC_Y + 9, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: '#334' }, 'USB-C x2');
+    el('rect', { x: PCB_X + 22, y: PCB_Y + 175, width: 150, height: 130, rx: 5, fill: '#0a1828', stroke: '#1a3060', 'stroke-width': 1.5 });
+    el('text', { x: CX, y: PCB_Y + 232, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 13, 'font-weight': 'bold', fill: '#3366aa' }, 'ESP32-S3');
+    el('text', { x: CX, y: PCB_Y + 263, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: '#1a3050' }, '16MB / 8MB PSRAM');
+    el('text', { x: CX, y: PCB_Y + 277, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: '#1a3050' }, 'Wi-Fi / BT5 / ESP-NOW');
+    el('text', { x: CX, y: PCB_Y + 291, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: '#1a3050' }, 'LX7x2 / 240MHz');
+    el('rect', { x: PCB_X + 22, y: PCB_Y + 395, width: 28, height: 13, rx: 2, fill: '#111', stroke: '#445', 'stroke-width': 1 });
+    el('text', { x: PCB_X + 36, y: PCB_Y + 404, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#667' }, 'BOOT');
+    el('rect', { x: PCB_X + 62, y: PCB_Y + 395, width: 28, height: 13, rx: 2, fill: '#111', stroke: '#445', 'stroke-width': 1 });
+    el('text', { x: PCB_X + 76, y: PCB_Y + 404, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#667' }, 'RST');
+    el('circle', { cx: PCB_X + 120, cy: PCB_Y + 416, r: 5, fill: '#130900', stroke: '#553300', 'stroke-width': 1 });
+    el('text', { x: PCB_X + 120, y: PCB_Y + 419, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#775522' }, 'RGB');
+    el('rect', { x: LBAR_X, y: PCB_Y + 6, width: LBAR_W, height: PCB_H - 12, rx: 2, fill: '#161000', stroke: '#3a2800', 'stroke-width': 1 });
+    el('rect', { x: RBAR_X, y: PCB_Y + 6, width: RBAR_W, height: PCB_H - 12, rx: 2, fill: '#161000', stroke: '#3a2800', 'stroke-width': 1 });
+    function drawPins(pins, dotX, isLeft) {
+      pins.forEach(([label, color, note], i) => {
+        const y = PIN_Y0 + i * PIN_DY;
+        const r = color === C.free || color === C.gnd || color === C.rst ? 3.5 : 5;
+        if (color === C.gnd) {
+          el('circle', { cx: dotX, cy: y, r, fill: '#ffffff', stroke: '#111111', 'stroke-width': 1.5 });
+        } else if (color === C.strap) {
+          el('circle', { cx: dotX, cy: y, r: 4.5, fill: '#cc2222', stroke: '#ff4444', 'stroke-width': 1 });
+          el('line', { x1: dotX - 3, y1: y - 3, x2: dotX + 3, y2: y + 3, stroke: '#ffffff', 'stroke-width': 1.5 });
+        } else {
+          el('circle', { cx: dotX, cy: y, r, fill: color });
+        }
+        const textCol = color === C.gnd ? '#999999' : color === C.strap ? '#883333' : color;
+        const innerX = isLeft ? dotX + 9 : dotX - 9;
+        const anchor = isLeft ? 'start' : 'end';
+        const isBold = (r > 3.5) ? 'bold' : 'normal';
+        el('text', { x: innerX, y: y + 3, 'text-anchor': anchor, 'font-family': 'JetBrains Mono', 'font-size': 7.5, 'font-weight': isBold, fill: textCol }, label);
+        if (note) {
+          const outerX = isLeft ? dotX - 10 : dotX + 10;
+          const outerAnchor = isLeft ? 'end' : 'start';
+          el('text', { x: outerX, y: y + 3, 'text-anchor': outerAnchor, 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: textCol }, note);
+        }
+      });
+    }
+
+    drawPins(LEFT, PIN_XL, true);
+    drawPins(RIGHT, PIN_XR, false);
+    // 3V3 пин ESP — потребитель (питание от TPS63020 →3.3V), не источник шины
+    const y5V = PIN_Y0 + 20 * PIN_DY;
+    const V5_VX = BUS_5V_X + 55; // x=83, правее блока TPS63020 3.3V
+    const V5_TAP_X = BUS_5V_X - 30;
+    // ESP 5Vin — рисуется ниже, после TFT (обход дисплея сверху)
+
+    const yGndL = PIN_Y0 + 21 * PIN_DY;
+    el('line', { x1: PIN_XL, y1: yGndL, x2: PIN_XL, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: PIN_XL, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    const TFT_W = 150, TFT_H = 142;
+    const TFT_X = 220;
+    const TFT_PIN_DY = PIN_DY; // same spacing as ESP = parallel wires!
+    const espPinY = (idx) => PIN_Y0 + idx * PIN_DY;
+    const TFT_PIN_Y0 = espPinY(15); // first TFT pin = same y as G10
+    const TFT_Y = TFT_PIN_Y0 - 15; // a bit of padding above first pin
+    const TFT_PIN_X = TFT_X + TFT_W; // right edge
+    el('rect', { x: TFT_X, y: TFT_Y, width: TFT_W, height: TFT_H, rx: 6, fill: '#041818', stroke: '#22aa77', 'stroke-width': 1.5 });
+    el('rect', { x: TFT_X + 10, y: TFT_Y + 8, width: TFT_W - 20, height: 50, rx: 3, fill: '#051810', stroke: '#1a7744', 'stroke-width': 1 });
+    el('text', { x: TFT_X + TFT_W / 2, y: TFT_Y + 44, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#228855' }, 'TFT 2.4" ILI9341');
+    const tftPins = [
+      ['CS',  '#ffcc00'],
+      ['DC',  '#ffcc00'],
+      ['RST', '#ffaa44'],   // shared RST
+      ['SCK', '#ffcc00'],
+      ['SDI', '#ffcc00'],
+    ];
+
+    tftPins.forEach(([label, color], i) => {
+      const y = TFT_PIN_Y0 + i * TFT_PIN_DY;
+      el('circle', { cx: TFT_PIN_X, cy: y, r: 2.5, fill: color });
+      el('text', { x: TFT_PIN_X - 8, y: y + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: color }, label);
+    });
+    // G10=CS(idx15), G11=DC(idx16), G12=SharedRST(idx17), G13=SCK(idx18), G14=MOSI(idx19)
+    const spiColors = ['#ffcc00', '#ffcc00', '#ffaa44', '#ffcc00', '#ffcc00'];
+    const spiIdxs = [15, 16, 17, 18, 19];
+
+    spiIdxs.forEach((espIdx, tftIdx) => {
+      const tftY = TFT_PIN_Y0 + tftIdx * TFT_PIN_DY;
+      const espY = espPinY(espIdx);
+      el('line', { x1: TFT_PIN_X, y1: tftY, x2: PIN_XL, y2: espY, stroke: spiColors[tftIdx], 'stroke-width': 1.8 });
+    });
+    const tftVccX = TFT_X + TFT_W - 5;
+    el('circle', { cx: tftVccX, cy: TFT_Y, r: 2.5, fill: '#ff4444' });
+    el('text', { x: tftVccX + 6, y: TFT_Y + 3, 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#ff4444' }, 'VCC');
+    el('line', { x1: tftVccX, y1: TFT_Y, x2: tftVccX, y2: BUS_3V3_Y, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: tftVccX, cy: BUS_3V3_Y, r: 3, fill: '#cc3333' });
+    const tftGndX = TFT_X + 5;
+    el('circle', { cx: tftGndX, cy: TFT_Y + TFT_H, r: 2.5, fill: '#556' });
+    el('text', { x: tftGndX + 6, y: TFT_Y + TFT_H + 3, 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#556' }, 'GND');
+    el('line', { x1: tftGndX, y1: TFT_Y + TFT_H, x2: tftGndX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: tftGndX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    // LED подсветки: J_TFT LED → 3V3 постоянно (v3); тумблер BL — только G37/G38 (не в цепи LED)
+    const tftLedY = TFT_Y + TFT_H - 12;
+    const BL_SW_X = tftVccX + 42;
+    el('circle', { cx: TFT_PIN_X, cy: tftLedY, r: 2.5, fill: C.pwr });
+    el('text', { x: TFT_PIN_X - 8, y: tftLedY + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#ff4444' }, 'LED');
+    // LED напрямую на 3V3 (подсветка всегда при питании)
+    el('line', { x1: TFT_PIN_X, y1: tftLedY, x2: tftVccX, y2: tftLedY, stroke: C.pwr, 'stroke-width': 1.5 });
+    el('line', { x1: tftVccX, y1: tftLedY, x2: tftVccX, y2: BUS_3V3_Y, stroke: C.pwr, 'stroke-width': 1.5 });
+    el('text', { x: tftVccX + 6, y: tftLedY - 4, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#aa5533' }, '→3V3');
+    // G37/G38 — свободны, без назначения (был тумблер BL — убран)
+    const blInY = tftLedY + 22;
+    el('text', { x: BL_SW_X, y: blInY + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#556' }, 'G37/G38: свободны');
+
+    // ESP 5Vin и общая шина 5V — рисуются после MUX (ниже SPI/SCK, обход MUX снизу)
+    const v5BusY = PCB_Y + PCB_H + 55; // под LoRa SPI (SCK/RST ~609) и USB-C
+    const esp5vDropX = PIN_XL - 6;
+
+    const BTN_W = 70, BTN_H = 18;
+    const BTN_X = 160;
+    const BTN_PIN_X = BTN_X + BTN_W;
+
+    const buttons = [
+      { label: '1', color: '#888888', espIdx: 3 },
+      { label: '2', color: '#888888', espIdx: 4 },
+      { label: '3', color: '#888888', espIdx: 5 },
+      { label: '4', color: '#888888', espIdx: 6 },
+    ];
+
+    const btnGroupY = espPinY(3) - 14;
+    el('text', { x: BTN_X + BTN_W / 2, y: btnGroupY, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#446644' }, 'Кнопки 1-4 (без назначения)');
+    const btnGndX = BTN_X - 70;
+    el('line', { x1: btnGndX, y1: espPinY(3), x2: btnGndX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: btnGndX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+
+    buttons.forEach(({ label, color, espIdx }) => {
+      const y = espPinY(espIdx);
+      el('rect', { x: BTN_X, y: y - BTN_H / 2, width: BTN_W, height: BTN_H, rx: 4, fill: '#0a1410', stroke: color, 'stroke-width': 1.5 });
+      el('text', { x: BTN_X + BTN_W / 2, y: y + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, fill: color }, label);
+      el('circle', { cx: BTN_PIN_X, cy: y, r: 2.5, fill: color });
+      el('line', { x1: BTN_PIN_X, y1: y, x2: PIN_XL, y2: y, stroke: color, 'stroke-width': 1.8 });
+      el('circle', { cx: BTN_X, cy: y, r: 2.5, fill: '#556' });
+      el('line', { x1: BTN_X, y1: y, x2: btnGndX, y2: y, stroke: '#556', 'stroke-width': 1.2 });
+    });
+
+    // ═══ ВИБРОМОТОР LRA (корпус) + Q1 2N2222 + D1 1N5819 ═══
+    const VIB_BLK_X = PIN_XR + 480;
+    const VIB_BLK_Y = espPinY(17) - 55;
+    const VIB_BLK_W = 200;
+    const VIB_BLK_H = 118;
+    el('rect', { x: VIB_BLK_X, y: VIB_BLK_Y, width: VIB_BLK_W, height: VIB_BLK_H, rx: 6, fill: '#0c0c10', stroke: '#888', 'stroke-width': 1.2, 'stroke-dasharray': '6,3' });
+    el('text', { x: VIB_BLK_X + VIB_BLK_W / 2, y: VIB_BLK_Y + 12, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#aaa' }, '\ud83d\udcf3 \u0412\u0438\u0431\u0440\u043e (LRA, \u043a\u043e\u0440\u043f\u0443\u0441)');
+    el('text', { x: VIB_BLK_X + VIB_BLK_W / 2, y: VIB_BLK_Y + 22, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#666' }, '5V\u2192[VIB]\u2192M+; G21\u2192R220\u03a9\u2192Q1\u2192M\u2212');
+
+    const g2Y = espPinY(17);
+    const RES_W = 28;
+    const R1_X = VIB_BLK_X + 12;
+    const R1_Y = VIB_BLK_Y + 52;
+    el('line', { x1: PIN_XR, y1: g2Y, x2: R1_X - 8, y2: g2Y, stroke: C.vib, 'stroke-width': 1.8 });
+    el('text', { x: PIN_XR + 28, y: g2Y - 5, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: C.vib }, 'G21');
+    el('line', { x1: R1_X - 8, y1: g2Y, x2: R1_X - 8, y2: R1_Y, stroke: C.vib, 'stroke-width': 1.5 });
+    el('line', { x1: R1_X - 8, y1: R1_Y, x2: R1_X, y2: R1_Y, stroke: C.vib, 'stroke-width': 1.5 });
+    el('rect', { x: R1_X, y: R1_Y - 5, width: RES_W, height: 10, rx: 2, fill: '#1a1a1a', stroke: '#888', 'stroke-width': 1 });
+    el('text', { x: R1_X + RES_W / 2, y: R1_Y + 3, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#aaa' }, '220\u03a9');
+
+    const TX = R1_X + RES_W + 22;
+    const TY = R1_Y;
+    el('line', { x1: R1_X + RES_W, y1: R1_Y, x2: TX - 8, y2: TY, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('line', { x1: TX - 8, y1: TY - 14, x2: TX - 8, y2: TY + 14, stroke: '#aaa', 'stroke-width': 2 });
+    el('line', { x1: TX - 16, y1: TY, x2: TX - 8, y2: TY, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('line', { x1: TX - 8, y1: TY - 8, x2: TX + 6, y2: TY - 18, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('line', { x1: TX - 8, y1: TY + 8, x2: TX + 6, y2: TY + 18, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('polygon', { points: `${TX + 6},${TY + 18} ${TX},${TY + 12} ${TX + 3},${TY + 9}`, fill: '#aaa' });
+    el('text', { x: TX, y: TY - 24, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6.5, fill: '#999' }, 'Q1 2N2222');
+    el('text', { x: TX - 20, y: TY + 2, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#888' }, 'B');
+    el('text', { x: TX - 22, y: TY - 14, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#888' }, 'C');
+    el('text', { x: TX + 10, y: TY + 16, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#888' }, 'E\u2192GND');
+
+    const COL_X = TX + 6;
+
+    // LRA: M− слева (от Q1), M+ справа (5V); корпус горизонтальный
+    const MOT_W = 50;
+    const MOT_H = 26;
+    const MOT_R = VIB_BLK_X + VIB_BLK_W - 22;
+    const MOT_L = MOT_R - MOT_W;
+    const MOT_CY = VIB_BLK_Y + 54;
+
+    el('rect', { x: MOT_L, y: MOT_CY - MOT_H / 2, width: MOT_W, height: MOT_H, rx: 4, fill: '#181818', stroke: '#aaa', 'stroke-width': 1.5 });
+    el('text', { x: MOT_L + MOT_W / 2, y: MOT_CY + 3, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, fill: '#ccc' }, 'LRA');
+    el('text', { x: MOT_L + MOT_W / 2, y: MOT_CY + 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#888' }, '8\u03a9 1.5W');
+    el('circle', { cx: MOT_L, cy: MOT_CY, r: 2.5, fill: '#aaa' });
+    el('text', { x: MOT_L - 8, y: MOT_CY + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#aaa' }, 'M\u2212');
+    el('circle', { cx: MOT_R, cy: MOT_CY, r: 2.5, fill: '#ff7700' });
+    el('text', { x: MOT_R + 8, y: MOT_CY + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#ff7700' }, 'M+');
+
+    // Шина M− (коллектор Q1) и шина M+ (5V) — только два вывода на модуле
+    el('line', { x1: COL_X, y1: TY - 18, x2: COL_X, y2: MOT_CY, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('line', { x1: COL_X, y1: MOT_CY, x2: MOT_L, y2: MOT_CY, stroke: '#aaa', 'stroke-width': 1.5 });
+    el('text', { x: COL_X + 6, y: MOT_CY - 5, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#888' }, 'C\u2192M\u2212');
+
+    const vib5StubX = MOT_R + 14;
+    const VIB_SW_X = vib5StubX + 8;
+    el('line', { x1: MOT_R, y1: MOT_CY, x2: vib5StubX, y2: MOT_CY, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('rect', { x: VIB_SW_X - 14, y: MOT_CY - 9, width: 28, height: 18, rx: 3, fill: '#141008', stroke: '#ffdd44', 'stroke-width': 1.2 });
+    el('text', { x: VIB_SW_X, y: MOT_CY + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ffdd44' }, 'VIB');
+    el('line', { x1: VIB_SW_X + 14, y1: MOT_CY, x2: VIB_SW_X + 28, y2: MOT_CY, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('line', { x1: VIB_SW_X + 28, y1: MOT_CY, x2: VIB_SW_X + 28, y2: v5BusY, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('circle', { cx: VIB_SW_X + 28, cy: v5BusY, r: 3, fill: '#ff7700' });
+
+    // D1 — горизонтально под мотором; выводы на шины M− и M+ (не на корпус LRA)
+    const diodeY = MOT_CY + MOT_H / 2 + 18;
+    const dAnodeTapX = COL_X + 24;
+    const dCathodeTapX = MOT_R + 8;
+    const diodeCenterX = MOT_L + MOT_W / 2;
+    const dTriX = diodeCenterX - 5;
+    const dBarX = diodeCenterX + 5;
+    el('circle', { cx: dAnodeTapX, cy: MOT_CY, r: 2.2, fill: '#ffaa44' });
+    el('circle', { cx: dCathodeTapX, cy: MOT_CY, r: 2.2, fill: '#ffaa44' });
+    el('line', { x1: dAnodeTapX, y1: MOT_CY, x2: dAnodeTapX, y2: diodeY, stroke: '#ffaa44', 'stroke-width': 1.2 });
+    el('line', { x1: dAnodeTapX, y1: diodeY, x2: dTriX, y2: diodeY, stroke: '#ffaa44', 'stroke-width': 1.5 });
+    el('line', { x1: dCathodeTapX, y1: MOT_CY, x2: dCathodeTapX, y2: diodeY, stroke: '#ffaa44', 'stroke-width': 1.2 });
+    el('line', { x1: dBarX, y1: diodeY, x2: dCathodeTapX, y2: diodeY, stroke: '#ffaa44', 'stroke-width': 1.5 });
+    el('polygon', { points: `${dTriX + 10},${diodeY} ${dTriX},${diodeY - 5} ${dTriX},${diodeY + 5}`, fill: '#ffaa44', stroke: '#ffaa44', 'stroke-width': 1 });
+    el('line', { x1: dBarX, y1: diodeY - 6, x2: dBarX, y2: diodeY + 6, stroke: '#ffaa44', 'stroke-width': 2.5 });
+    el('text', { x: dTriX - 2, y: diodeY + 14, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#cc8833' }, '\u25b6 \u0430\u043d\u043e\u0434 \u2192 M\u2212');
+    el('text', { x: dBarX + 2, y: diodeY - 10, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#ffcc66' }, '\u2502 \u043a\u0430\u0442\u043e\u0434 \u2192 M+');
+    el('text', { x: diodeCenterX, y: diodeY + 22, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ffaa44' }, 'D1 1N5819');
+
+    const EX = TX + 6, EY = TY + 18;
+    el('line', { x1: EX, y1: EY, x2: EX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: EX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    el('text', { x: VIB_BLK_X + 8, y: VIB_BLK_Y + VIB_BLK_H - 6, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#886633' }, 'D1 || шины: анод\u2192линия M\u2212, катод\u2192линия M+/5V');
+
+
+    const DFP_W = 120, DFP_H = 70;
+    const DFP_X = 200; // between buttons(160) and TFT(290)
+    const DFP_PIN_Y0 = espPinY(9); // first UART pin y
+    const DFP_Y = DFP_PIN_Y0 - 15;
+    const DFP_PIN_X = DFP_X + DFP_W; // right edge facing ESP
+    el('rect', { x: DFP_X, y: DFP_Y, width: DFP_W, height: DFP_H, rx: 5, fill: '#100a20', stroke: '#8855cc', 'stroke-width': 1.5 });
+    el('text', { x: DFP_X + 18, y: DFP_Y + 26, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#9977cc' }, 'µSD');
+    el('text', { x: DFP_X + 18, y: DFP_Y + 26, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#9977cc' }, '\u00B5SD');
+    el('text', { x: DFP_X + DFP_W / 2 + 10, y: DFP_Y + 22, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 10, 'font-weight': 'bold', fill: '#bb88ff' }, 'MP3-TF-16P');
+    el('text', { x: DFP_X + DFP_W / 2 + 10, y: DFP_Y + 48, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#6644aa' }, '↓ см. ниже');
+    el('circle', { cx: DFP_PIN_X, cy: DFP_PIN_Y0, r: 2.5, fill: '#ff9922' });
+    el('text', { x: DFP_PIN_X - 8, y: DFP_PIN_Y0 + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#ff9922' }, 'RX');
+    el('circle', { cx: DFP_PIN_X, cy: DFP_PIN_Y0 + PIN_DY, r: 2.5, fill: '#ff9922' });
+    el('text', { x: DFP_PIN_X - 8, y: DFP_PIN_Y0 + PIN_DY + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#ff9922' }, 'TX');
+    el('line', { x1: DFP_PIN_X, y1: DFP_PIN_Y0, x2: PIN_XL, y2: DFP_PIN_Y0, stroke: '#ff9922', 'stroke-width': 1.8 });
+    el('line', { x1: DFP_PIN_X, y1: DFP_PIN_Y0 + PIN_DY, x2: PIN_XL, y2: DFP_PIN_Y0 + PIN_DY, stroke: '#ff9922', 'stroke-width': 1.8 });
+    const dfpVccX = DFP_X + DFP_W / 2 - 10;
+    const SND_SW_X = dfpVccX - 42;
+    el('circle', { cx: dfpVccX, cy: DFP_Y, r: 2.5, fill: '#ff7700' });
+    el('text', { x: dfpVccX + 6, y: DFP_Y + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#ff7700' }, '5V');
+    el('line', { x1: dfpVccX, y1: DFP_Y, x2: dfpVccX, y2: DFP_Y - 15, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('rect', { x: SND_SW_X - 14, y: DFP_Y - 24, width: 28, height: 18, rx: 3, fill: '#141008', stroke: '#ffdd44', 'stroke-width': 1.2 });
+    el('text', { x: SND_SW_X, y: DFP_Y - 11, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ffdd44' }, 'SND');
+    el('line', { x1: SND_SW_X + 14, y1: DFP_Y - 15, x2: dfpVccX, y2: DFP_Y - 15, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('line', { x1: SND_SW_X - 14, y1: DFP_Y - 15, x2: V5_TAP_X, y2: DFP_Y - 15, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('circle', { cx: V5_TAP_X, cy: DFP_Y - 15, r: 3, fill: '#ff7700' });
+    const dfpGndX = DFP_X + 5;
+    el('circle', { cx: dfpGndX, cy: DFP_Y + DFP_H, r: 2.5, fill: '#556' });
+    el('text', { x: dfpGndX + 6, y: DFP_Y + DFP_H + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#556' }, 'GND');
+    el('line', { x1: dfpGndX, y1: DFP_Y + DFP_H, x2: dfpGndX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: dfpGndX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    const spkY1 = DFP_Y + 12, spkY2 = DFP_Y + 40;
+    el('circle', { cx: DFP_X, cy: spkY1, r: 2.5, fill: '#8866aa' });
+    el('text', { x: DFP_X + 8, y: spkY1 + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#8866aa' }, 'SPK+');
+    el('circle', { cx: DFP_X, cy: spkY2, r: 2.5, fill: '#8866aa' });
+    el('text', { x: DFP_X + 8, y: spkY2 + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#8866aa' }, 'SPK-');
+    const SPK_X = DFP_X - 70;
+    const SPK_Y = (spkY1 + spkY2) / 2;
+    el('rect', { x: SPK_X, y: SPK_Y - 18, width: 30, height: 36, rx: 3, fill: '#0e0e0e', stroke: '#666', 'stroke-width': 1.5 });
+    el('polygon', { points: `${SPK_X + 30},${SPK_Y - 18} ${SPK_X + 50},${SPK_Y - 28} ${SPK_X + 50},${SPK_Y + 28} ${SPK_X + 30},${SPK_Y + 18}`, fill: '#0a0a0a', stroke: '#666', 'stroke-width': 1 });
+    el('path', { d: `M${SPK_X + 54},${SPK_Y - 10} Q${SPK_X + 60},${SPK_Y} ${SPK_X + 54},${SPK_Y + 10}`, fill: 'none', stroke: '#444', 'stroke-width': 1 });
+    el('path', { d: `M${SPK_X + 58},${SPK_Y - 15} Q${SPK_X + 66},${SPK_Y} ${SPK_X + 58},${SPK_Y + 15}`, fill: 'none', stroke: '#333', 'stroke-width': 1 });
+
+    el('text', { x: SPK_X + 15, y: SPK_Y + 32, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#555' }, 'Спикер 8Ω 2W');
+    el('line', { x1: DFP_X, y1: spkY1, x2: SPK_X + 50, y2: spkY1, stroke: '#8866aa', 'stroke-width': 1.5 });
+    el('line', { x1: DFP_X, y1: spkY2, x2: SPK_X + 50, y2: spkY2, stroke: '#8866aa', 'stroke-width': 1.5 });
+
+    const leds = [
+      { name: 'RED LED', color: '#ff4444', glow: '#ff222233', leftIdx: 7, label: 'Damage/Dead', xOff: 30, res: '220Ω' },
+      { name: 'GRN LED', color: '#33dd55', glow: '#22ff2233', leftIdx: 8, label: 'Safe Zone', xOff: 30, res: '100Ω' },
+    ];
+
+    const LED_RES_W = 28, LED_RES_H = 8;
+
+    leds.forEach(({ name, color, glow, leftIdx, label, xOff, res }) => {
+      const y = PIN_Y0 + leftIdx * PIN_DY;
+      const LED_RES_X = PIN_XL - xOff - LED_RES_W;
+      el('line', { x1: PIN_XL, y1: y, x2: LED_RES_X + LED_RES_W, y2: y, stroke: color, 'stroke-width': 1.8 });
+      el('rect', { x: LED_RES_X, y: y - LED_RES_H / 2, width: LED_RES_W, height: LED_RES_H, rx: 2, fill: '#1a1a1a', stroke: '#888', 'stroke-width': 1 });
+      el('text', { x: LED_RES_X + LED_RES_W / 2, y: y + 3, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#aaa' }, res);
+      const lx = LED_RES_X - 6;
+      el('polygon', { points: `${lx},${y - 6} ${lx},${y + 6} ${lx - 12},${y}`, fill: color, opacity: '0.6' });
+      el('line', { x1: lx - 12, y1: y - 6, x2: lx - 12, y2: y + 6, stroke: color, 'stroke-width': 2 });
+      el('circle', { cx: lx - 6, cy: y, r: 10, fill: glow });
+      el('text', { x: lx - 18, y: y - 4, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: color }, name);
+      el('text', { x: lx - 18, y: y + 6, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: color.replace('ff', '88').replace('dd', '88') }, label);
+      const cathX = lx - 12;
+      el('line', { x1: cathX, y1: y, x2: btnGndX, y2: y, stroke: '#556', 'stroke-width': 1.2 });
+      el('circle', { cx: btnGndX, cy: y, r: 2.5, fill: '#556' });
+    });
+    const MUX_W = 80, MUX_H = 50;
+    const MUX_X = 100;
+    const MUX_SDA_Y = espPinY(14); // G9
+    const MUX_SCL_Y = espPinY(11); // G8
+    const MUX_CY = 355; // in gap between DFP(bottom~325) and TFT(top~387)
+    const MUX_Y = MUX_CY - MUX_H / 2;
+    const MUX_R = MUX_X + MUX_W;
+
+    el('rect', { x: MUX_X, y: MUX_Y, width: MUX_W, height: MUX_H, rx: 5, fill: '#081018', stroke: '#44ccaa', 'stroke-width': 1.5 });
+    el('text', { x: MUX_X + MUX_W / 2, y: MUX_CY - 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', fill: '#44ccaa' }, 'TCA9548A');
+    el('text', { x: MUX_X + MUX_W / 2, y: MUX_CY + 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#226644' }, '↓ см. ниже');
+    const bx1 = 325;
+    el('line', { x1: PIN_XL, y1: MUX_SDA_Y, x2: bx1, y2: MUX_SDA_Y, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('line', { x1: bx1, y1: MUX_SDA_Y, x2: bx1, y2: MUX_CY - 8, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('line', { x1: bx1, y1: MUX_CY - 8, x2: MUX_R, y2: MUX_CY - 8, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('text', { x: MUX_R - 5, y: MUX_CY - 5, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#44ccaa' }, 'SDA');
+    const bx2 = 320;
+    el('line', { x1: PIN_XL, y1: MUX_SCL_Y, x2: bx2, y2: MUX_SCL_Y, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('line', { x1: bx2, y1: MUX_SCL_Y, x2: bx2, y2: MUX_CY + 8, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('line', { x1: bx2, y1: MUX_CY + 8, x2: MUX_R, y2: MUX_CY + 8, stroke: '#44ccaa', 'stroke-width': 1.8 });
+    el('text', { x: MUX_R - 5, y: MUX_CY + 11, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#33aa88' }, 'SCL');
+    el('line', { x1: MUX_X + 5, y1: MUX_Y, x2: MUX_X + 5, y2: BUS_3V3_Y, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: MUX_X + 5, cy: BUS_3V3_Y, r: 3, fill: '#cc3333' });
+    el('text', { x: MUX_X + 10, y: MUX_Y + 10, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc3333' }, 'VCC');
+    el('line', { x1: MUX_X + MUX_W - 5, y1: MUX_Y + MUX_H, x2: MUX_X + MUX_W - 5, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: MUX_X + MUX_W - 5, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    el('text', { x: MUX_X + MUX_W - 10, y: MUX_Y + MUX_H - 5, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#556' }, 'GND');
+
+    // ═══ 5V BUS: ESP ↓ → низкая шина vib+ESP → ↑ слева от MUX → ← к DCDC ═══
+    const v5MuxTapY = MUX_Y + MUX_H + 16; // горизонталь строго ПОД корпусом MUX
+    const v5TrunkX = MUX_X - 14;          // вертикаль слева от MUX (не через модуль)
+    const v5DcdcY = BUS_3V3_Y + 10;
+    // ESP 5Vin: вниз к общей шине
+    el('line', { x1: PIN_XL, y1: y5V, x2: esp5vDropX, y2: y5V, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('line', { x1: esp5vDropX, y1: y5V, x2: esp5vDropX, y2: v5BusY, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('circle', { cx: esp5vDropX, cy: v5BusY, r: 3.5, fill: '#ff7700' });
+    el('text', { x: esp5vDropX + 8, y: y5V + 14, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#ff7700' }, 'ESP 5Vin');
+    // Горизонталь vib → ESP → левее MUX (под SCK/SPI)
+    const vib5TapX = VIB_SW_X + 28;
+    el('line', { x1: vib5TapX, y1: v5BusY, x2: v5TrunkX, y2: v5BusY, stroke: '#ff7700', 'stroke-width': 2 });
+    el('text', { x: (vib5TapX + esp5vDropX) / 2, y: v5BusY + 12, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#ff7700' }, '5V BUS (vib+ESP)');
+    // Вверх слева от MUX до уровня под модулем
+    el('line', { x1: v5TrunkX, y1: v5BusY, x2: v5TrunkX, y2: v5MuxTapY, stroke: '#ff7700', 'stroke-width': 2 });
+    el('circle', { cx: v5TrunkX, cy: v5MuxTapY, r: 3, fill: '#ff7700' });
+    // Под MUX влево к вертикальной шине
+    el('line', { x1: v5TrunkX, y1: v5MuxTapY, x2: V5_TAP_X, y2: v5MuxTapY, stroke: '#ff7700', 'stroke-width': 2 });
+    // Вверх по V5_TAP_X к DCDC и DFPlayer
+    el('line', { x1: V5_TAP_X, y1: v5MuxTapY, x2: V5_TAP_X, y2: v5DcdcY, stroke: '#ff7700', 'stroke-width': 2.5 });
+    el('line', { x1: V5_TAP_X, y1: DFP_Y - 15, x2: V5_TAP_X, y2: v5MuxTapY, stroke: '#ff7700', 'stroke-width': 2 });
+    el('circle', { cx: V5_TAP_X, cy: v5DcdcY, r: 3.5, fill: '#ff7700' });
+
+    const DET_Y = BUS_GND_Y + 40;
+    const TCA_SEC_X = 360, TCA_SEC_Y = DET_Y - 15;
+    el('text', { x: TCA_SEC_X + 515, y: DET_Y, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 12, 'font-weight': 'bold', fill: '#44ccaa' }, '─── TCA9548A · Мультиплексор I2C ───');
+    el('rect', { x: 5, y: TCA_SEC_Y, width: 345, height: 580, rx: 10, fill: 'none', stroke: '#8855cc33', 'stroke-width': 1.5, 'stroke-dasharray': '8,4' });
+    const DM_X = 750, DM_Y = DET_Y + 20, DM_W = 200, DM_H = 300;
+    el('rect', { x: DM_X, y: DM_Y, width: DM_W, height: DM_H, rx: 6, fill: '#2a0840', stroke: '#44ccaa', 'stroke-width': 2 });
+    el('text', { x: DM_X + DM_W / 2, y: DM_Y + 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 12, 'font-weight': 'bold', fill: '#bb88ff' }, 'TCA9548A');
+    el('text', { x: DM_X + DM_W / 2, y: DM_Y + 32, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, fill: '#8866aa' }, 'HW-617');
+    const leftPins = ['SD2', 'SC2', 'SD3', 'SC3', 'SD4', 'SC4', 'SD5', 'SC5', 'SD6', 'SC6', 'SD7', 'SC7'];
+    const pDY = 20, pY0 = DM_Y + 50;
+    leftPins.forEach((name, i) => {
+      const py = pY0 + i * pDY;
+      const isSD = name.startsWith('SD');
+      const col = isSD ? '#44ccaa' : '#33aa88';
+      el('circle', { cx: DM_X, cy: py, r: 3, fill: col });
+      el('text', { x: DM_X + 8, y: py + 4, 'font-family': 'JetBrains Mono', 'font-size': 7, fill: col }, name);
+    });
+    const rightPins = [
+      { name: 'SC1', col: '#33aa88' },
+      { name: 'SD1', col: '#44ccaa' },
+      { name: 'SC0', col: '#33aa88' },
+      { name: 'SD0', col: '#44ccaa' },
+      { name: 'A2', col: '#888' },
+      { name: 'A1', col: '#888' },
+      { name: 'A0', col: '#888' },
+      { name: 'RST', col: '#cc6666' },
+      { name: 'SCL', col: '#44ccaa' },
+      { name: 'SDA', col: '#44ccaa' },
+      { name: 'GND', col: '#556' },
+      { name: 'VIN', col: '#ff4444' },
+    ];
+    rightPins.forEach(({ name, col }, i) => {
+      const py = pY0 + i * pDY;
+      el('circle', { cx: DM_X + DM_W, cy: py, r: 3, fill: col });
+      el('text', { x: DM_X + DM_W - 8, y: py + 4, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: col }, name);
+    });
+    const EE_W = 120, EE_H = 90;
+    const EE_XL = DM_X - EE_W - 200; // left, further away
+    const EE_XR = DM_X + DM_W + 200; // right, further away
+    const chipDY = 130; // vertical spacing between chips
+    el('text', { x: EE_XL + EE_W / 2, y: pY0 - 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', fill: '#3388aa' }, 'CH2-4 · внешние картриджи');
+    el('text', { x: EE_XR + EE_W / 2, y: pY0 - 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', fill: '#3388aa' }, 'CH0-1 · внешние картриджи');
+    function drawEEPROM(x, y, slotN, ch, muxSide) {
+      const pinDY = 14;
+      const flip = (muxSide === 'right'); // flip so SDA/SCL faces left toward MUX
+      el('rect', { x: x, y: y, width: EE_W, height: EE_H, rx: 4, fill: '#0a0a18', stroke: '#3388aa', 'stroke-width': 1.5 });
+      el('path', { d: `M${x + EE_W / 2 - 6},${y} A6,6 0 0,1 ${x + EE_W / 2 + 6},${y}`, fill: '#0a0a18', stroke: '#3388aa', 'stroke-width': 1 });
+      el('text', { x: x + EE_W / 2, y: y + 24, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#226688' }, '24LC256');
+      const addrPins = [
+        { n: 1, name: 'A0', to: 'GND', col: '#556' }, { n: 2, name: 'A1', to: 'GND', col: '#556' },
+        { n: 3, name: 'A2', to: 'GND', col: '#556' }, { n: 4, name: 'VSS', to: 'GND', col: '#556' },
+      ];
+      const dataPins = [
+        { n: 8, name: 'VCC', to: '3V3', col: '#cc3333' }, { n: 7, name: 'WP', to: 'GND', col: '#556' },
+        { n: 6, name: 'SCL', to: `SC${ch}`, col: '#33aa88' }, { n: 5, name: 'SDA', to: `SD${ch}`, col: '#44ccaa' },
+      ];
+      const leftPins = flip ? dataPins : addrPins;
+      const rightPins = flip ? addrPins : dataPins;
+      const pY = y + 32;
+
+      leftPins.forEach(({ n, name, to, col }, i) => {
+        const py = pY + i * pinDY;
+        el('circle', { cx: x, cy: py, r: 2.5, fill: col });
+        el('text', { x: x + 6, y: py + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: col }, `${n}.${name}`);
+      });
+      rightPins.forEach(({ n, name, to, col }, i) => {
+        const py = pY + i * pinDY;
+        el('circle', { cx: x + EE_W, cy: py, r: 2.5, fill: col });
+        el('text', { x: x + EE_W - 6, y: py + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: col }, `${name}.${n}`);
+      });
+      const sdaIdx = 3; // SDA is 4th in dataPins
+      const sclIdx = 2; // SCL is 3rd in dataPins
+      if (flip) {
+        const sdaPY = pY + sdaIdx * pinDY;
+        const sclPY = pY + sclIdx * pinDY;
+        const scMuxY = pY0 + (2 - ch * 2) * pDY;
+        const sdMuxY = pY0 + (3 - ch * 2) * pDY;
+        const midX = DM_X + DM_W + 30 + ch * 15;
+        el('line', { x1: x, y1: sclPY, x2: midX + 10, y2: sclPY, stroke: '#33aa88', 'stroke-width': 1.2 });
+        el('line', { x1: midX + 10, y1: sclPY, x2: midX + 10, y2: scMuxY, stroke: '#33aa88', 'stroke-width': 1.2 });
+        el('line', { x1: midX + 10, y1: scMuxY, x2: DM_X + DM_W, y2: scMuxY, stroke: '#33aa88', 'stroke-width': 1.2 });
+        el('line', { x1: x, y1: sdaPY, x2: midX, y2: sdaPY, stroke: '#44ccaa', 'stroke-width': 1.2 });
+        el('line', { x1: midX, y1: sdaPY, x2: midX, y2: sdMuxY, stroke: '#44ccaa', 'stroke-width': 1.2 });
+        el('line', { x1: midX, y1: sdMuxY, x2: DM_X + DM_W, y2: sdMuxY, stroke: '#44ccaa', 'stroke-width': 1.2 });
+      } else {
+        const sdaPY = pY + sdaIdx * pinDY;
+        const sclPY = pY + sclIdx * pinDY;
+        const li = (ch - 2) * 2;
+        const sdMuxY = pY0 + li * pDY;
+        const scMuxY = pY0 + (li + 1) * pDY;
+        const sdaMidX = x + EE_W + 60 + (ch - 2) * 30;
+        const sclMidX = sdaMidX - 12;
+        el('line', { x1: x + EE_W, y1: sdaPY, x2: sdaMidX, y2: sdaPY, stroke: '#44ccaa', 'stroke-width': 1.5 });
+        el('line', { x1: sdaMidX, y1: sdaPY, x2: sdaMidX, y2: sdMuxY, stroke: '#44ccaa', 'stroke-width': 1.5 });
+        el('line', { x1: sdaMidX, y1: sdMuxY, x2: DM_X, y2: sdMuxY, stroke: '#44ccaa', 'stroke-width': 1.5 });
+        el('line', { x1: x + EE_W, y1: sclPY, x2: sclMidX, y2: sclPY, stroke: '#33aa88', 'stroke-width': 1.5 });
+        el('line', { x1: sclMidX, y1: sclPY, x2: sclMidX, y2: scMuxY, stroke: '#33aa88', 'stroke-width': 1.5 });
+        el('line', { x1: sclMidX, y1: scMuxY, x2: DM_X, y2: scMuxY, stroke: '#33aa88', 'stroke-width': 1.5 });
+      }
+    }
+    drawEEPROM(EE_XR, pY0 - 5, 2, 1, 'right');
+    drawEEPROM(EE_XR, pY0 - 5 + chipDY, 1, 0, 'right');
+    drawEEPROM(EE_XL, pY0 - 5, 3, 2, 'left');
+    drawEEPROM(EE_XL, pY0 - 5 + chipDY, 4, 3, 'left');
+    drawEEPROM(EE_XL, pY0 - 5 + chipDY * 2, 5, 4, 'left');
+    const DET_BUS_X1 = EE_XL - 40;
+    const DET_BUS_X2 = EE_XR + EE_W + 40;
+    const DET_3V3_Y = DM_Y - 15;
+    const DET_GND_Y = pY0 - 5 + chipDY * 2 + EE_H + 20;
+    el('line', { x1: DET_BUS_X1, y1: DET_3V3_Y, x2: DET_BUS_X2, y2: DET_3V3_Y, stroke: '#cc3333', 'stroke-width': 2.5 });
+    el('text', { x: DET_BUS_X1 - 5, y: DET_3V3_Y + 4, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#cc3333' }, '3V3');
+    el('text', { x: DET_BUS_X2 + 5, y: DET_3V3_Y + 4, 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#cc3333' }, '3V3');
+    el('line', { x1: DET_BUS_X1, y1: DET_GND_Y, x2: DET_BUS_X2, y2: DET_GND_Y, stroke: '#556', 'stroke-width': 2.5 });
+    el('text', { x: DET_BUS_X1 - 5, y: DET_GND_Y + 4, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#556' }, 'GND');
+    el('text', { x: DET_BUS_X2 + 5, y: DET_GND_Y + 4, 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#556' }, 'GND');
+    const muxSclPinY = pY0 + 8 * pDY; // SCL pin on MUX right side
+    const muxSdaPinY = pY0 + 9 * pDY; // SDA pin on MUX right side
+    const i2cBelowY = DET_GND_Y + 30;
+    const sclWireX = DM_X + DM_W + 15;
+    const sdaWireX = DM_X + DM_W + 5;
+    el('line', { x1: DM_X + DM_W, y1: muxSclPinY, x2: sclWireX, y2: muxSclPinY, stroke: '#33aa88', 'stroke-width': 1.5 });
+    el('line', { x1: sclWireX, y1: muxSclPinY, x2: sclWireX, y2: i2cBelowY, stroke: '#33aa88', 'stroke-width': 1.5 });
+    el('text', { x: sclWireX, y: i2cBelowY + 12, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#33aa88' }, 'SCL→G8');
+    el('line', { x1: DM_X + DM_W, y1: muxSdaPinY, x2: sdaWireX, y2: muxSdaPinY, stroke: '#44ccaa', 'stroke-width': 1.5 });
+    el('line', { x1: sdaWireX, y1: muxSdaPinY, x2: sdaWireX, y2: i2cBelowY + 20, stroke: '#44ccaa', 'stroke-width': 1.5 });
+    el('text', { x: sdaWireX, y: i2cBelowY + 32, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#44ccaa' }, 'SDA→G9');
+    el('text', { x: TCA_SEC_X + 515, y: DET_Y + 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, fill: '#66cc88' }, '✅ Стенд PASS 10.06.2026 · A0–A2→GND (0x70) · RST→3V3 · EEPROM_TCA_Test');
+    const R_VCC_X = Math.round((DM_X + DM_W + EE_XR) / 2); // midpoint between MUX and slots
+    const R_GND_X = R_VCC_X + 30; // further right, same gap as VCC offset
+    const muxLastPinY = pY0 + 11 * pDY; // VIN = last pin
+    el('line', { x1: R_VCC_X, y1: DET_3V3_Y, x2: R_VCC_X, y2: muxLastPinY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: R_VCC_X, cy: DET_3V3_Y, r: 3, fill: '#cc3333' });
+    const muxA2Y = pY0 + 4 * pDY; // A2 = first GND pin on MUX right side
+    el('line', { x1: R_GND_X, y1: muxA2Y, x2: R_GND_X, y2: DET_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: R_GND_X, cy: DET_GND_Y, r: 3, fill: '#556' });
+    const muxVinY = pY0 + 11 * pDY;
+    const muxGndY = pY0 + 10 * pDY;
+    const muxRstY = pY0 + 7 * pDY;
+    el('line', { x1: DM_X + DM_W, y1: muxVinY, x2: R_VCC_X, y2: muxVinY, stroke: '#cc3333', 'stroke-width': 1.2 });
+    el('circle', { cx: R_VCC_X, cy: muxVinY, r: 2.5, fill: '#cc3333' });
+    el('line', { x1: DM_X + DM_W, y1: muxRstY, x2: R_VCC_X, y2: muxRstY, stroke: '#cc6666', 'stroke-width': 1.2 });
+    el('circle', { cx: R_VCC_X, cy: muxRstY, r: 2.5, fill: '#cc6666' });
+    el('line', { x1: DM_X + DM_W, y1: muxGndY, x2: DM_X + DM_W + 10, y2: muxGndY, stroke: '#556', 'stroke-width': 1.2 });
+    el('line', { x1: DM_X + DM_W + 10, y1: muxGndY, x2: DM_X + DM_W + 10, y2: muxGndY + 8, stroke: '#556', 'stroke-width': 1.2 });
+    el('line', { x1: DM_X + DM_W + 10, y1: muxGndY + 8, x2: R_GND_X, y2: muxGndY + 8, stroke: '#556', 'stroke-width': 1.2 });
+    el('circle', { cx: R_GND_X, cy: muxGndY + 8, r: 2.5, fill: '#556' });
+    for (let a = 0; a < 3; a++) {
+      const aY = pY0 + (4 + a) * pDY; // A2=4, A1=5, A0=6
+      el('line', { x1: DM_X + DM_W, y1: aY, x2: R_GND_X, y2: aY, stroke: '#556', 'stroke-width': 1 });
+      el('circle', { cx: R_GND_X, cy: aY, r: 2, fill: '#556' });
+    }
+    const R_EE_GND_X = EE_XR + EE_W + 15; // GND vertical right of slots
+    const firstRGndY = pY0 - 5 + 32; // SLOT 2 (top) first pin Y
+    el('line', { x1: R_EE_GND_X, y1: firstRGndY, x2: R_EE_GND_X, y2: DET_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: R_EE_GND_X, cy: DET_GND_Y, r: 3, fill: '#556' });
+
+    for (let i = 0; i < 2; i++) {
+      const pYbase = pY0 - 5 + i * chipDY + 32;
+      el('line', { x1: EE_XR, y1: pYbase, x2: R_VCC_X, y2: pYbase, stroke: '#cc3333', 'stroke-width': 1.2 });
+      el('circle', { cx: R_VCC_X, cy: pYbase, r: 2.5, fill: '#cc3333' });
+      for (let p = 0; p < 4; p++) {
+        const pinY = pYbase + p * 14;
+        el('line', { x1: EE_XR + EE_W, y1: pinY, x2: R_EE_GND_X, y2: pinY, stroke: '#556', 'stroke-width': 1 });
+        el('circle', { cx: R_EE_GND_X, cy: pinY, r: 2, fill: '#556' });
+      }
+      const wpY = pYbase + 1 * 14;
+      const wpBelowY = pY0 - 5 + i * chipDY + EE_H + 8;
+      const wpMidX = EE_XR - 5 - i * 6;
+      el('line', { x1: EE_XR, y1: wpY, x2: wpMidX, y2: wpY, stroke: '#556', 'stroke-width': 1 });
+      el('line', { x1: wpMidX, y1: wpY, x2: wpMidX, y2: wpBelowY, stroke: '#556', 'stroke-width': 1 });
+      el('line', { x1: wpMidX, y1: wpBelowY, x2: R_EE_GND_X, y2: wpBelowY, stroke: '#556', 'stroke-width': 1 });
+      el('circle', { cx: R_EE_GND_X, cy: wpBelowY, r: 2, fill: '#556' });
+    }
+    const L_VCC_X = EE_XL + EE_W + 32; // RIGHT of chips, 4x further
+    const L_GND_X = EE_XL - 15;       // LEFT of chips (pin4=VSS side)
+    const lastVccY = pY0 - 5 + chipDY * 2 + 32; // last slot's VCC pin Y
+    el('line', { x1: L_VCC_X, y1: DET_3V3_Y, x2: L_VCC_X, y2: lastVccY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: L_VCC_X, cy: DET_3V3_Y, r: 3, fill: '#cc3333' });
+    const firstGndY = pY0 - 5 + 32; // first slot's top pin Y
+    el('line', { x1: L_GND_X, y1: firstGndY, x2: L_GND_X, y2: DET_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: L_GND_X, cy: DET_GND_Y, r: 3, fill: '#556' });
+    for (let i = 0; i < 3; i++) {
+      const pYbase = pY0 - 5 + i * chipDY + 32;
+      const vccY = pYbase;
+      el('line', { x1: EE_XL + EE_W, y1: vccY, x2: L_VCC_X, y2: vccY, stroke: '#cc3333', 'stroke-width': 1.2 });
+      el('circle', { cx: L_VCC_X, cy: vccY, r: 2.5, fill: '#cc3333' });
+      for (let p = 0; p < 4; p++) {
+        const pinY = pYbase + p * 14;
+        el('line', { x1: EE_XL, y1: pinY, x2: L_GND_X, y2: pinY, stroke: '#556', 'stroke-width': 1 });
+        el('circle', { cx: L_GND_X, cy: pinY, r: 2, fill: '#556' });
+      }
+      const wpY = pYbase + 1 * 14; // WP is rightPins[1]
+      const wpBelowY = pY0 - 5 + i * chipDY + EE_H + 8;
+      const wpMidX = EE_XL + EE_W + 5 + i * 6;
+      el('line', { x1: EE_XL + EE_W, y1: wpY, x2: wpMidX, y2: wpY, stroke: '#556', 'stroke-width': 1 });
+      el('line', { x1: wpMidX, y1: wpY, x2: wpMidX, y2: wpBelowY, stroke: '#556', 'stroke-width': 1 });
+      el('line', { x1: wpMidX, y1: wpBelowY, x2: L_GND_X, y2: wpBelowY, stroke: '#556', 'stroke-width': 1 });
+      el('circle', { cx: L_GND_X, cy: wpBelowY, r: 2, fill: '#556' });
+    }
+    const DF_DET_Y = DET_Y;
+    el('rect', { x: 5, y: DET_Y - 15, width: 345, height: 580, rx: 10, fill: 'none', stroke: '#8855cc33', 'stroke-width': 1.5, 'stroke-dasharray': '8,4' });
+    el('text', { x: 200, y: DF_DET_Y, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 12, 'font-weight': 'bold', fill: '#bb88ff' }, '─── MP3-TF-16P ───');
+    const DF_X = 120, DF_Y2 = DF_DET_Y + 20, DF_W2 = 200, DF_H2 = 220;
+    el('rect', { x: DF_X, y: DF_Y2, width: DF_W2, height: DF_H2, rx: 8, fill: '#100a20', stroke: '#8855cc', 'stroke-width': 2 });
+    el('text', { x: DF_X + DF_W2 / 2, y: DF_Y2 + 22, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 14, 'font-weight': 'bold', fill: '#bb88ff' }, 'MP3-TF-16P');
+    el('text', { x: DF_X + DF_W2 / 2, y: DF_Y2 + 38, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, fill: '#8866aa' }, 'DFPlayer Mini');
+    const dfLeftPins = [
+      { n: 1, name: 'VCC', use: '5V', col: '#ff7700' },
+      { n: 2, name: 'RX', use: 'G17', col: '#ff9922' },
+      { n: 3, name: 'TX', use: 'G18', col: '#ff9922' },
+      { n: 4, name: 'DAC_R', use: '', col: '#444' },
+      { n: 5, name: 'DAC_L', use: '', col: '#444' },
+      { n: 6, name: 'SPK+', use: 'SPK', col: '#8866aa' },
+      { n: 7, name: 'GND', use: 'GND', col: '#556' },
+      { n: 8, name: 'SPK-', use: 'SPK', col: '#8866aa' },
+    ];
+    const dfRightPins = [
+      { n: 16, name: 'BUSY', use: '', col: '#444' },
+      { n: 15, name: 'USB-', use: '', col: '#444' },
+      { n: 14, name: 'USB+', use: '', col: '#444' },
+      { n: 13, name: 'ADKEY2', use: '', col: '#444' },
+      { n: 12, name: 'ADKEY1', use: '', col: '#444' },
+      { n: 11, name: 'IO2', use: '', col: '#444' },
+      { n: 10, name: 'GND', use: '', col: '#444' },
+      { n: 9, name: 'IO1', use: '', col: '#444' },
+    ];
+
+    const dfPinDY = 22, dfPinY0 = DF_Y2 + 55;
+    dfLeftPins.forEach(({ n, name, use, col }, i) => {
+      const py = dfPinY0 + i * dfPinDY;
+      el('circle', { cx: DF_X, cy: py, r: 3, fill: col });
+      el('text', { x: DF_X + 8, y: py + 4, 'font-family': 'JetBrains Mono', 'font-size': 8, fill: col }, `${n}. ${name}`);
+    });
+    dfRightPins.forEach(({ n, name, use, col }, i) => {
+      const py = dfPinY0 + i * dfPinDY;
+      el('circle', { cx: DF_X + DF_W2, cy: py, r: 3, fill: col });
+      el('text', { x: DF_X + DF_W2 - 8, y: py + 4, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 8, fill: col }, `${name} .${n}`);
+    });
+    const spkDetY = dfPinY0 + 5.5 * dfPinDY;
+    // Speaker shape in detail view
+    const spkDX = DF_X - 130, spkDY = spkDetY - 18;
+    el('rect', { x: spkDX, y: spkDY, width: 30, height: 36, rx: 3, fill: '#0e0e0e', stroke: '#666', 'stroke-width': 1.5 });
+    el('polygon', { points: `${spkDX + 30},${spkDY} ${spkDX + 50},${spkDY - 10} ${spkDX + 50},${spkDY + 46} ${spkDX + 30},${spkDY + 36}`, fill: '#0a0a0a', stroke: '#666', 'stroke-width': 1 });
+    el('path', { d: `M${spkDX + 54},${spkDetY - 10} Q${spkDX + 60},${spkDetY} ${spkDX + 54},${spkDetY + 10}`, fill: 'none', stroke: '#444', 'stroke-width': 1 });
+    el('path', { d: `M${spkDX + 58},${spkDetY - 15} Q${spkDX + 66},${spkDetY} ${spkDX + 58},${spkDetY + 15}`, fill: 'none', stroke: '#333', 'stroke-width': 1 });
+    el('text', { x: spkDX + 15, y: spkDetY + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#777' }, '8Ω');
+    el('text', { x: spkDX + 15, y: spkDetY + 32, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#555' }, 'Спикер 2W');
+    el('line', { x1: DF_X - 50, y1: dfPinY0 + 5 * dfPinDY, x2: spkDX + 50, y2: dfPinY0 + 5 * dfPinDY, stroke: '#8866aa', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X, y1: dfPinY0 + 5 * dfPinDY, x2: DF_X - 50, y2: dfPinY0 + 5 * dfPinDY, stroke: '#8866aa', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X - 50, y1: dfPinY0 + 7 * dfPinDY, x2: spkDX + 50, y2: dfPinY0 + 7 * dfPinDY, stroke: '#8866aa', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X, y1: dfPinY0 + 7 * dfPinDY, x2: DF_X - 50, y2: dfPinY0 + 7 * dfPinDY, stroke: '#8866aa', 'stroke-width': 1.5 });
+    const dfExtX = DF_X + DF_W2 + 20;
+    const vccPY = dfPinY0;
+    el('line', { x1: DF_X, y1: vccPY, x2: DF_X - 15, y2: vccPY, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X - 15, y1: vccPY, x2: DF_X - 15, y2: vccPY - 25, stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('text', { x: DF_X - 15, y: vccPY - 30, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#ff7700' }, '→5V');
+    const rxPY = dfPinY0 + dfPinDY;
+    el('line', { x1: DF_X, y1: rxPY, x2: DF_X - 55, y2: rxPY, stroke: '#ff9922', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X - 55, y1: rxPY, x2: DF_X - 55, y2: vccPY - 25, stroke: '#ff9922', 'stroke-width': 1.5 });
+    el('text', { x: DF_X - 55, y: vccPY - 30, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#ff9922' }, 'RX←G17');
+    const txPY = dfPinY0 + 2 * dfPinDY;
+    el('line', { x1: DF_X, y1: txPY, x2: DF_X - 95, y2: txPY, stroke: '#ff9922', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X - 95, y1: txPY, x2: DF_X - 95, y2: vccPY - 25, stroke: '#ff9922', 'stroke-width': 1.5 });
+    el('text', { x: DF_X - 95, y: vccPY - 30, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#ff9922' }, 'TX→G18');
+    const gndPY = dfPinY0 + 6 * dfPinDY;
+    el('line', { x1: DF_X, y1: gndPY, x2: DF_X - 55, y2: gndPY, stroke: '#556', 'stroke-width': 1.5 });
+    el('line', { x1: DF_X - 55, y1: gndPY, x2: DF_X - 55, y2: gndPY + 40, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: DF_X - 55, cy: gndPY + 40, r: 3, fill: '#556' });
+    el('text', { x: DF_X - 55, y: gndPY + 52, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#556' }, 'GND');
+
+    const LORA_W = 100, LORA_H = 80;
+    const UWB_W = 110, UWB_H = 88;
+    const RF_GAP = 36; // зазор между LoRa и BU03
+    const LORA_X = PIN_XR + 200;
+    const UWB_X = LORA_X + LORA_W + RF_GAP;
+    // LoRa — центр по CS(G39) и DIO0(G41); UWB — отдельно по UART-пинам
+    const LORA_CY = (espPinY(6) + espPinY(8)) / 2;
+    const LORA_Y = LORA_CY - LORA_H / 2;
+    const UWB_CY = (espPinY(3) + espPinY(6)) / 2;
+    const UWB_Y = UWB_CY - UWB_H / 2;
+
+    // ── LoRa SX1278 ──
+    el('rect', { x: LORA_X, y: LORA_Y, width: LORA_W, height: LORA_H, rx: 6, fill: '#0a1020', stroke: '#4488ff', 'stroke-width': 1.5 });
+    const antX = LORA_X + 14, antY = LORA_Y - 24;
+    el('line', { x1: antX, y1: LORA_Y, x2: antX, y2: antY, stroke: '#4488ff', 'stroke-width': 2 });
+    el('path', { d: `M${antX - 8},${antY + 5} Q${antX},${antY - 5} ${antX + 8},${antY + 5}`, fill: 'none', stroke: '#4488ff', 'stroke-width': 1.5 });
+    el('path', { d: `M${antX - 14},${antY + 10} Q${antX},${antY - 10} ${antX + 14},${antY + 10}`, fill: 'none', stroke: '#3366cc', 'stroke-width': 1 });
+    el('text', { x: antX, y: antY - 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#4488ff' }, 'ANT');
+    el('text', { x: LORA_X + LORA_W / 2, y: LORA_CY - 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', fill: '#4488ff' }, 'SX1278 Ra-01');
+    el('text', { x: LORA_X + LORA_W / 2, y: LORA_CY - 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#336699' }, 'LoRa 433MHz (+ANT)');
+    el('text', { x: LORA_X + LORA_W / 2, y: LORA_CY + 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#2a5588' }, 'CS=G39 DIO0=G41');
+    el('text', { x: LORA_X + LORA_W / 2, y: LORA_CY + 16, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#2a5588' }, 'RST=G12(shared)');
+    // CS=G39(idx8), DIO0=G41(idx6). RST=G12 shared — drawn via left side
+    const loraPins = [
+      { label: 'CS',   espIdx: 8, color: '#4488ff' },   // G39
+      { label: 'DIO0', espIdx: 6, color: '#4488ff' },   // G41
+    ];
+    loraPins.forEach(({ label, espIdx, color }) => {
+      const y = espPinY(espIdx);
+      el('circle', { cx: LORA_X, cy: y, r: 2.5, fill: color });
+      el('text', { x: LORA_X + 8, y: y + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: color }, label);
+      el('line', { x1: PIN_XR, y1: y, x2: LORA_X, y2: y, stroke: color, 'stroke-width': 1.5 });
+    });
+    const spiRouteBase = PCB_Y + PCB_H + 25; // between USB-C label and GND bus
+    const spiJunctionXBase = (TFT_X + TFT_W + PIN_XL) / 2 - 8; // between TFT right edge and ESP left pins
+
+    // SPI+RST from LoRa bottom: MOSI=G14(idx19), SCK=G13(idx18), SharedRST=G12(idx17)
+    const spiPins = [
+      { label: 'MOSI', loraX: LORA_X + 20, leftIdx: 19, routeOff:  0, jOff:  0, col: '#44ccaa' },
+      { label: 'SCK',  loraX: LORA_X + 50, leftIdx: 18, routeOff:  8, jOff:  8, col: '#44ccaa' },
+      { label: 'RST',  loraX: LORA_X + 80, leftIdx: 17, routeOff: 16, jOff: 16, col: '#ffaa44' },
+    ];
+    spiPins.forEach(({ label, loraX, leftIdx, routeOff, jOff, col }) => {
+      const pinY = PIN_Y0 + leftIdx * PIN_DY;
+      const routeY = spiRouteBase + routeOff;
+      const jx = spiJunctionXBase + jOff;
+      el('circle', { cx: loraX, cy: LORA_Y + LORA_H, r: 2, fill: col });
+      el('line', { x1: loraX, y1: LORA_Y + LORA_H, x2: loraX, y2: routeY, stroke: col, 'stroke-width': 1.2 });
+      el('line', { x1: loraX, y1: routeY, x2: jx, y2: routeY, stroke: col, 'stroke-width': 1.2 });
+      el('line', { x1: jx, y1: routeY, x2: jx, y2: pinY, stroke: col, 'stroke-width': 1.2 });
+      el('circle', { cx: jx, cy: pinY, r: 3.5, fill: col });
+      el('text', { x: loraX, y: LORA_Y + LORA_H - 5, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: col }, label);
+    });
+    // MISO=G40 (right side, rightIdx7): LoRa left-side → straight left to PIN_XR at G40 y
+    const misoY = PIN_Y0 + 7 * PIN_DY; // G40 y = 226
+    el('circle', { cx: LORA_X, cy: misoY, r: 2.5, fill: '#44ccaa' });
+    el('text', { x: LORA_X + 6, y: misoY - 2, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#44ccaa' }, 'MISO');
+    el('line', { x1: LORA_X, y1: misoY, x2: PIN_XR, y2: misoY, stroke: '#44ccaa', 'stroke-width': 1.5 });
+    el('circle', { cx: PIN_XR, cy: misoY, r: 3.5, fill: '#44ccaa' });
+
+    const loraVccX = LORA_X + 5;
+    el('line', { x1: loraVccX, y1: LORA_Y, x2: loraVccX, y2: BUS_3V3_Y, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: loraVccX, cy: BUS_3V3_Y, r: 3, fill: '#cc3333' });
+    el('text', { x: loraVccX + 5, y: LORA_Y + 10, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc3333' }, 'VCC');
+    const loraGndX = LORA_X + LORA_W - 5;
+    el('line', { x1: loraGndX, y1: LORA_Y + LORA_H, x2: loraGndX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: loraGndX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    el('text', { x: LORA_X + LORA_W - 10, y: LORA_Y + LORA_H - 5, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#556' }, 'GND');
+
+    // ═══ UWB: BU03-Kit (UART AT, TWR) — отдельно от LoRa, общий RF_CY ═══
+    el('rect', { x: UWB_X, y: UWB_Y, width: UWB_W, height: UWB_H, rx: 6, fill: '#0a0a20', stroke: '#cc88ff', 'stroke-width': 1.5 });
+    const uwbAntX = UWB_X + UWB_W - 14, uwbAntY = UWB_Y - 24;
+    el('line', { x1: uwbAntX, y1: UWB_Y, x2: uwbAntX, y2: uwbAntY, stroke: '#cc88ff', 'stroke-width': 2 });
+    el('path', { d: `M${uwbAntX - 8},${uwbAntY + 5} Q${uwbAntX},${uwbAntY - 5} ${uwbAntX + 8},${uwbAntY + 5}`, fill: 'none', stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('path', { d: `M${uwbAntX - 14},${uwbAntY + 10} Q${uwbAntX},${uwbAntY - 10} ${uwbAntX + 14},${uwbAntY + 10}`, fill: 'none', stroke: '#aa66cc', 'stroke-width': 1 });
+    el('text', { x: uwbAntX, y: uwbAntY - 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#cc88ff' }, 'ANT');
+    el('text', { x: UWB_X + UWB_W / 2, y: UWB_CY - 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', fill: '#cc88ff' }, 'BU03-Kit');
+    el('text', { x: UWB_X + UWB_W / 2, y: UWB_CY - 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#9966cc' }, 'STM32 + DW3000');
+    el('text', { x: UWB_X + UWB_W / 2, y: UWB_CY + 6, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#7744aa' }, 'UART 115200 AT');
+    el('text', { x: UWB_X + UWB_W / 2, y: UWB_CY + 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#7744aa' }, 'PA2(TX)→G1  G2→RX');
+    el('text', { x: UWB_X + UWB_W / 2, y: UWB_CY + 30, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#6644aa' }, 'керам. антенна');
+    const bu03UartPins = [
+      { label: 'TX→G1', espIdx: 3, color: '#ff9922' },
+      { label: 'RX←G2', espIdx: 4, color: '#ff9922' },
+    ];
+    bu03UartPins.forEach(({ label, espIdx, color }) => {
+      const y = espPinY(espIdx);
+      el('circle', { cx: UWB_X, cy: y, r: 2.5, fill: color });
+      el('text', { x: UWB_X + 8, y: y + 3, 'font-family': 'JetBrains Mono', 'font-size': 6, fill: color }, label);
+      el('line', { x1: PIN_XR, y1: y, x2: UWB_X, y2: y, stroke: color, 'stroke-width': 1.5 });
+    });
+    // ═══ BU03 POWER KEY: справа от BU03; VCC — с правого края модуля ═══
+    const bu03PwrY = espPinY(5);
+    const uwbVccRightX = UWB_X + UWB_W;
+    const uwbVccPinY = UWB_CY - 8;
+    const uwbGndX = UWB_X + UWB_W - 8;
+    const g42BypassY = UWB_Y - 34; // обход модуля BU03 сверху (ниже антенн)
+
+    const BU_PWR_W = 268;
+    const BU_PWR_H = 100;
+    const BU_PWR_X = UWB_X + UWB_W + 32;
+    const BU_PWR_Y = g42BypassY - BU_PWR_H - 8;
+
+    el('rect', { x: BU_PWR_X, y: BU_PWR_Y, width: BU_PWR_W, height: BU_PWR_H, rx: 6, fill: '#0a0818', stroke: '#cc88ff', 'stroke-width': 1.2, 'stroke-dasharray': '6,3' });
+    el('text', { x: BU_PWR_X + BU_PWR_W / 2, y: BU_PWR_Y + 13, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#cc88ff' }, 'BU03 POWER KEY');
+    el('text', { x: BU_PWR_X + BU_PWR_W / 2, y: BU_PWR_Y + 24, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#9966cc' }, 'G42 HIGH = ON · R8 → gate → 3V3 = OFF');
+
+    const buSigY = BU_PWR_Y + 62;
+    const bu3v3RailY = BU_PWR_Y + 32;
+    const buGndY = BU_PWR_Y + BU_PWR_H - 10;
+
+    // G42 — обход BU03 сверху (не через корпус модуля)
+    const g42PreX = UWB_X - 14;
+    el('line', { x1: PIN_XR, y1: bu03PwrY, x2: g42PreX, y2: bu03PwrY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('text', { x: PIN_XR + 8, y: bu03PwrY - 5, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc88ff' }, 'G42');
+    el('line', { x1: g42PreX, y1: bu03PwrY, x2: g42PreX, y2: g42BypassY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('line', { x1: g42PreX, y1: g42BypassY, x2: BU_PWR_X + 8, y2: g42BypassY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('line', { x1: BU_PWR_X + 8, y1: g42BypassY, x2: BU_PWR_X + 8, y2: buSigY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+
+    const buRX = BU_PWR_X + 28;
+    const bu03ResW = 32;
+    el('line', { x1: BU_PWR_X + 8, y1: buSigY, x2: buRX, y2: buSigY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('rect', { x: buRX, y: buSigY - 5, width: bu03ResW, height: 10, rx: 2, fill: '#1a1028', stroke: '#cc88ff', 'stroke-width': 1 });
+    el('text', { x: buRX + bu03ResW / 2, y: buSigY + 3, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc88ff' }, '220\u03a9');
+
+    // Q2 2N2222 (NPN, эмиттер на GND)
+    const buQX = buRX + bu03ResW + 34;
+    const buQY = buSigY;
+    el('line', { x1: buRX + bu03ResW, y1: buSigY, x2: buQX - 10, y2: buQY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('circle', { cx: buQX - 10, cy: buQY, r: 2.2, fill: '#cc88ff' });
+    el('line', { x1: buQX - 10, y1: buQY - 12, x2: buQX - 10, y2: buQY + 12, stroke: '#cc88ff', 'stroke-width': 2 });
+    el('line', { x1: buQX - 18, y1: buQY, x2: buQX - 10, y2: buQY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('line', { x1: buQX - 10, y1: buQY - 7, x2: buQX + 4, y2: buQY - 16, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('line', { x1: buQX - 10, y1: buQY + 7, x2: buQX + 4, y2: buQY + 16, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('polygon', { points: `${buQX + 4},${buQY + 16} ${buQX - 1},${buQY + 10} ${buQX + 2},${buQY + 8}`, fill: '#cc88ff' });
+    el('text', { x: buQX - 2, y: buQY - 22, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, fill: '#cc88ff' }, 'Q2');
+    el('text', { x: buQX + 12, y: buQY - 10, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#888' }, 'C\u2192G');
+    el('text', { x: buQX + 12, y: buQY + 14, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#888' }, 'E\u2192GND');
+    const buEX = buQX + 4;
+    el('line', { x1: buEX, y1: buQY + 16, x2: buEX, y2: buGndY, stroke: '#556', 'stroke-width': 1.5 });
+    el('line', { x1: BU_PWR_X + 12, y1: buGndY, x2: buEX, y2: buGndY, stroke: '#556', 'stroke-width': 1.5 });
+    el('line', { x1: BU_PWR_X + 12, y1: buGndY, x2: BU_PWR_X + 12, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: BU_PWR_X + 12, cy: BUS_GND_Y, r: 3, fill: '#556' });
+
+    // P-MOS AO3401 (SOT-23): канал по центру, подписи сбоку
+    const pmX = buQX + 60;
+    const pmTop = BU_PWR_Y + 42;
+    const pmBot = BU_PWR_Y + 78;
+    const pmGateY = (pmTop + pmBot) / 2;
+    const pmChanX = pmX + 10;
+    el('line', { x1: buQX + 4, y1: buQY - 16, x2: pmX, y2: pmGateY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('circle', { cx: pmX, cy: pmGateY, r: 2.2, fill: '#cc88ff' });
+    el('line', { x1: pmX, y1: pmGateY, x2: pmChanX, y2: pmGateY, stroke: '#cc88ff', 'stroke-width': 1.5 });
+    el('line', { x1: pmChanX, y1: pmTop, x2: pmChanX, y2: pmBot, stroke: '#cc88ff', 'stroke-width': 3 });
+    el('line', { x1: pmChanX, y1: pmTop, x2: pmChanX + 12, y2: pmTop - 10, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('line', { x1: pmChanX, y1: pmBot, x2: pmChanX + 12, y2: pmBot + 10, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('text', { x: pmX - 10, y: pmGateY + 3, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#888' }, 'G');
+    el('text', { x: pmChanX + 26, y: pmTop - 8, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#cc3333' }, 'S\u21923V3');
+    el('text', { x: pmChanX + 26, y: pmBot + 16, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#cc3333' }, 'D\u2192VCC');
+    el('text', { x: pmChanX + 26, y: pmGateY + 2, 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#cc88ff' }, 'AO3401');
+    el('text', { x: pmChanX + 26, y: pmGateY + 11, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#9966cc' }, 'P-MOS');
+
+    // R8 10k: gate → 3.3V
+    const pmGateX = pmX;
+    el('line', { x1: pmGateX, y1: pmGateY, x2: pmGateX, y2: bu3v3RailY + 14, stroke: '#cc88ff', 'stroke-width': 1.2 });
+    el('rect', { x: pmGateX - 5, y: bu3v3RailY + 14, width: 10, height: 18, rx: 1, fill: '#060a12', stroke: '#cc88ff', 'stroke-width': 1 });
+    el('line', { x1: pmGateX, y1: bu3v3RailY + 32, x2: pmGateX, y2: bu3v3RailY, stroke: '#cc88ff', 'stroke-width': 1.2 });
+    el('text', { x: pmGateX - 8, y: bu3v3RailY + 26, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc88ff' }, 'R8 10k');
+
+    // 3.3V BUS → Source
+    const pmSrcX = pmChanX + 12;
+    el('line', { x1: pmSrcX, y1: pmTop - 10, x2: pmSrcX, y2: bu3v3RailY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('line', { x1: BU_PWR_X + BU_PWR_W - 10, y1: bu3v3RailY, x2: pmSrcX, y2: bu3v3RailY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: BU_PWR_X + BU_PWR_W - 10, cy: bu3v3RailY, r: 2.5, fill: '#cc3333' });
+    el('line', { x1: BU_PWR_X + BU_PWR_W - 10, y1: bu3v3RailY, x2: BU_PWR_X + BU_PWR_W - 10, y2: BUS_3V3_Y, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: BU_PWR_X + BU_PWR_W - 10, cy: BUS_3V3_Y, r: 3, fill: '#cc3333' });
+    el('text', { x: BU_PWR_X + BU_PWR_W - 6, y: bu3v3RailY - 4, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc3333' }, '3.3V');
+
+    // Drain → горизонталь на уровне правого пина VCC BU03
+    const pmDrainX = pmChanX + 12;
+    el('line', { x1: pmDrainX, y1: pmBot + 10, x2: pmDrainX, y2: uwbVccPinY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('line', { x1: pmDrainX, y1: uwbVccPinY, x2: uwbVccRightX, y2: uwbVccPinY, stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('circle', { cx: uwbVccRightX, cy: uwbVccPinY, r: 2.5, fill: '#cc3333' });
+    el('text', { x: uwbVccRightX + 6, y: uwbVccPinY + 3, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc3333' }, 'VCC');
+
+    el('text', { x: BU_PWR_X + 8, y: BU_PWR_Y + BU_PWR_H - 1, 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#8866aa' }, 'high-side: S\u21923.3V, D\u2192VCC BU03, Q2 LOW gate = ON');
+
+    // TROUBLESHOOT
+    const BU_TS_X = BU_PWR_X + BU_PWR_W + 8;
+    const BU_TS_Y = BU_PWR_Y + 2;
+    const BU_TS_W = 112;
+    const BU_TS_H = 68;
+    el('rect', { x: BU_TS_X, y: BU_TS_Y, width: BU_TS_W, height: BU_TS_H, rx: 4, fill: '#1a0a0a', stroke: '#ff6644', 'stroke-width': 1.2 });
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 10, 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ff8866' }, 'TROUBLESHOOT');
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 20, 'font-family': 'JetBrains Mono', 'font-size': 4.8, fill: '#ccaa88' }, 'G42 HIGH: gate\u22480V, VCC\u22483.3V');
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 29, 'font-family': 'JetBrains Mono', 'font-size': 4.8, fill: '#ccaa88' }, 'G42 LOW: gate\u22483.3V, VCC\u22480V');
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 38, 'font-family': 'JetBrains Mono', 'font-size': 4.8, fill: '#ccaa88' }, 'AO3401 SOT-23: 1=G 2=S 3=D');
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 47, 'font-family': 'JetBrains Mono', 'font-size': 4.8, fill: '#ccaa88' }, 'R8 на gate, не на drain');
+    el('text', { x: BU_TS_X + 6, y: BU_TS_Y + 56, 'font-family': 'JetBrains Mono', 'font-size': 4.8, fill: '#ccaa88' }, 'C2 справа от BU03: VCC + GND модуля');
+
+    // BU03 GND — напрямую вниз, без блока ключа
+    const uwbGndBotY = UWB_Y + UWB_H;
+    el('line', { x1: uwbGndX, y1: uwbGndBotY, x2: uwbGndX, y2: BUS_GND_Y, stroke: '#556', 'stroke-width': 1.5 });
+    el('circle', { cx: uwbGndX, cy: BUS_GND_Y, r: 3, fill: '#556' });
+    el('text', { x: UWB_X + UWB_W - 10, y: uwbGndBotY - 5, 'text-anchor': 'end', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#556' }, 'GND');
+
+    // C2 100n — справа от GND-линии BU03; пластины ||, выводы слева (VCC) и справа (GND)
+    const c2X = UWB_X + UWB_W + 24;
+    const c2CY = UWB_CY + 20;
+    const c2PlateL = c2X - 6;
+    const c2PlateR = c2X;
+    const vccTapX = uwbVccRightX - 4;
+    el('line', { x1: c2PlateL, y1: c2CY - 8, x2: c2PlateL, y2: c2CY + 8, stroke: '#cc88ff', 'stroke-width': 2 });
+    el('line', { x1: c2PlateR, y1: c2CY - 8, x2: c2PlateR, y2: c2CY + 8, stroke: '#cc88ff', 'stroke-width': 2 });
+    el('text', { x: c2X + 12, y: c2CY - 10, 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc88ff' }, 'C2 100n');
+    // левый вывод → VCC (ломаная: влево, вверх, влево)
+    const c2VccBendX = c2X - 20;
+    el('line', { x1: c2PlateL, y1: c2CY, x2: c2VccBendX, y2: c2CY, stroke: '#cc3333', 'stroke-width': 1.2 });
+    el('line', { x1: c2VccBendX, y1: c2CY, x2: c2VccBendX, y2: uwbVccPinY, stroke: '#cc3333', 'stroke-width': 1.2 });
+    el('line', { x1: c2VccBendX, y1: uwbVccPinY, x2: vccTapX, y2: uwbVccPinY, stroke: '#cc3333', 'stroke-width': 1.2 });
+    el('circle', { cx: vccTapX, cy: uwbVccPinY, r: 2.5, fill: '#cc3333' });
+    // правый вывод → GND (ломаная: вправо, вниз, влево)
+    const c2GndBendX = c2X + 16;
+    el('line', { x1: c2PlateR, y1: c2CY, x2: c2GndBendX, y2: c2CY, stroke: '#556', 'stroke-width': 1.2 });
+    el('line', { x1: c2GndBendX, y1: c2CY, x2: c2GndBendX, y2: uwbGndBotY, stroke: '#556', 'stroke-width': 1.2 });
+    el('line', { x1: c2GndBendX, y1: uwbGndBotY, x2: uwbGndX, y2: uwbGndBotY, stroke: '#556', 'stroke-width': 1.2 });
+    el('circle', { cx: uwbGndX, cy: uwbGndBotY, r: 2.5, fill: '#556' });
+
+    const PWR_BLK_X = BUS_5V_X - 22;
+    const PWR_BLK_Y = BUS_GND_Y - 45;
+    el('rect', { x: PWR_BLK_X, y: PWR_BLK_Y, width: 44, height: 50, rx: 5, fill: '#0e0800', stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('text', { x: BUS_5V_X, y: PWR_BLK_Y + 16, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 8, 'font-weight': 'bold', fill: '#ff9933' }, 'АКБ');
+    el('text', { x: BUS_5V_X, y: PWR_BLK_Y + 28, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, fill: '#996622' }, 'Li-Po');
+    el('text', { x: BUS_5V_X, y: PWR_BLK_Y + 38, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#664411' }, '3.7V');
+    const CHG_X = PWR_BLK_X - 58, CHG_Y = PWR_BLK_Y + 8;
+    el('rect', { x: CHG_X, y: CHG_Y - 18, width: 48, height: 36, rx: 4, fill: '#0a1008', stroke: '#44aa66', 'stroke-width': 1.5 });
+    el('text', { x: CHG_X + 24, y: CHG_Y - 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#44cc77' }, 'IP2312');
+    el('text', { x: CHG_X + 24, y: CHG_Y + 8, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#338855' }, 'зарядка');
+    el('line', { x1: CHG_X + 48, y1: CHG_Y, x2: PWR_BLK_X, y2: PWR_BLK_Y + 20, stroke: '#44aa66', 'stroke-width': 1.5 });
+    const PWR_SW_Y = BUS_GND_Y - 80;
+    el('line', { x1: BUS_5V_X, y1: PWR_BLK_Y, x2: BUS_5V_X, y2: PWR_SW_Y + 12, stroke: '#ff7700', 'stroke-width': 3 });
+    el('rect', { x: BUS_5V_X - 18, y: PWR_SW_Y - 12, width: 36, height: 24, rx: 4, fill: '#1a0a00', stroke: '#ff7700', 'stroke-width': 1.5 });
+    el('text', { x: BUS_5V_X, y: PWR_SW_Y + 3, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', fill: '#ff9933' }, 'PWR');
+    el('text', { x: BUS_5V_X, y: PWR_SW_Y - 16, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#664411' }, 'разрыв АКБ');
+    // === НОВАЯ СХЕМА ПИТАНИЯ: 2 параллельные ветки от батареи/выключателя ===
+    const JUNC_Y = PWR_SW_Y - 12; // верх выключателя = точка разветвления
+    const DCDC_5V_X = BUS_5V_X - 30; // TPS63020 понижающий → 5V, левее 5V шины
+    const DCDC_3V3_X = BUS_5V_X + 30; // TPS63020 повышающий → 3.3V, правее
+    const CONV_Y = 480;           // Y центр конверторов
+    // --- JUNCTION: выход из выключателя = точка разветвления ---
+    el('circle', { cx: BUS_5V_X, cy: JUNC_Y, r: 4, fill: '#ff7700' }); // junction dot
+
+    // --- Ветка TPS63020 понижающий (→5V): влево → вниз → вверх к 5V BUS ---
+    el('line', { x1: BUS_5V_X, y1: JUNC_Y, x2: DCDC_5V_X, y2: JUNC_Y, stroke: '#ff7700', 'stroke-width': 2 });
+    el('line', { x1: DCDC_5V_X, y1: JUNC_Y, x2: DCDC_5V_X, y2: CONV_Y + 17, stroke: '#ff7700', 'stroke-width': 2 });
+    el('rect', { x: DCDC_5V_X - 22, y: CONV_Y - 17, width: 44, height: 34, rx: 4, fill: '#1a0800', stroke: '#ff9933', 'stroke-width': 1.5 });
+    el('text', { x: DCDC_5V_X, y: CONV_Y - 8, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ff9933' }, 'TPS63020');
+    el('text', { x: DCDC_5V_X, y: CONV_Y + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc6600' }, '↓ пониж.');
+    el('text', { x: DCDC_5V_X, y: CONV_Y + 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#cc6600' }, '→5V');
+    el('line', { x1: DCDC_5V_X, y1: CONV_Y - 17, x2: DCDC_5V_X, y2: BUS_3V3_Y + 10, stroke: '#ff7700', 'stroke-width': 3 });
+    el('line', { x1: DCDC_5V_X, y1: BUS_3V3_Y + 10, x2: BUS_5V_X, y2: BUS_3V3_Y + 10, stroke: '#ff7700', 'stroke-width': 3 });
+    // --- Ветка TPS63020 повышающий (→3.3V): вправо → вниз → вверх к 3V3 BUS ---
+    el('line', { x1: BUS_5V_X, y1: JUNC_Y, x2: DCDC_3V3_X, y2: JUNC_Y, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('line', { x1: DCDC_3V3_X, y1: JUNC_Y, x2: DCDC_3V3_X, y2: CONV_Y + 17, stroke: '#ff7700', 'stroke-width': 1.8 });
+    el('rect', { x: DCDC_3V3_X - 22, y: CONV_Y - 17, width: 44, height: 34, rx: 4, fill: '#00100a', stroke: '#cc3333', 'stroke-width': 1.5 });
+    el('text', { x: DCDC_3V3_X, y: CONV_Y - 8, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 6, 'font-weight': 'bold', fill: '#ff5555' }, 'TPS63020');
+    el('text', { x: DCDC_3V3_X, y: CONV_Y + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#aa2222' }, '↑ повыш.');
+    el('text', { x: DCDC_3V3_X, y: CONV_Y + 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#aa2222' }, '→3.3V');
+    el('line', { x1: DCDC_3V3_X, y1: CONV_Y - 17, x2: DCDC_3V3_X, y2: BUS_3V3_Y, stroke: '#cc3333', 'stroke-width': 2 });
+    el('circle', { cx: DCDC_3V3_X, cy: BUS_3V3_Y, r: 3, fill: '#cc3333' });
+    // --- Метки шин ---
+    el('text', { x: BUS_5V_X - 6, y: BUS_3V3_Y + 60, fill: '#ff9933', 'font-family': 'JetBrains Mono', 'font-size': 9, 'font-weight': 'bold', 'writing-mode': 'tb' }, '5V BUS');
+    el('text', { x: DCDC_3V3_X + 6, y: BUS_3V3_Y + 40, fill: '#cc3333', 'font-family': 'JetBrains Mono', 'font-size': 7, 'font-weight': 'bold', 'writing-mode': 'tb' }, '3V3 SRC');
+
+
+    const SW_W = 60, SW_H = 18;
+    const SW_X = PIN_XR + 60;
+    // Физические ключи PWR/SND/VIB — в разрыве питания; BL/SND/VIB положение — G37/G38/G47/G48
+    const HW_SW_Y = espPinY(15);
+    el('rect', { x: SW_X, y: HW_SW_Y - 28, width: SW_W + 20, height: 52, rx: 5, fill: '#0a0804', stroke: '#886633', 'stroke-width': 1, 'stroke-dasharray': '4,3' });
+    el('text', { x: SW_X + (SW_W + 20) / 2, y: HW_SW_Y - 18, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5.5, fill: '#886633' }, 'корпус: PWR/SND/VIB/BL');
+    el('text', { x: SW_X + (SW_W + 20) / 2, y: HW_SW_Y - 8, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#665522' }, 'PWR/SND/VIB — разрыв питания');
+    el('text', { x: SW_X + (SW_W + 20) / 2, y: HW_SW_Y + 4, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono', 'font-size': 5, fill: '#665522' }, 'BL→G37/G38; свободных GPIO нет');
+
+    // ═══ PASSIVE COMPONENTS ═══
+    function rV(cx,y1,y2,lbl,col){
+      const my=(y1+y2)/2;
+      el('line',{x1:cx,y1:y1,x2:cx,y2:my-12,stroke:col,'stroke-width':1.2});
+      el('rect',{x:cx-5,y:my-12,width:10,height:24,rx:1,fill:'#060a12',stroke:col,'stroke-width':1});
+      el('line',{x1:cx,y1:my+12,x2:cx,y2:y2,stroke:col,'stroke-width':1.2});
+      el('text',{x:cx+8,y:my+4,'font-family':'JetBrains Mono','font-size':6,fill:col},lbl);
+    }
+    function rH(x1,x2,cy,lbl,col){
+      const mx=(x1+x2)/2;
+      el('line',{x1:x1,y1:cy,x2:mx-12,y2:cy,stroke:col,'stroke-width':1.2});
+      el('rect',{x:mx-12,y:cy-5,width:24,height:10,rx:1,fill:'#060a12',stroke:col,'stroke-width':1});
+      el('line',{x1:mx+12,y1:cy,x2:x2,y2:cy,stroke:col,'stroke-width':1.2});
+      el('text',{x:mx,y:cy-8,'text-anchor':'middle','font-family':'JetBrains Mono','font-size':6,fill:col},lbl);
+    }
+    function cV(cx,y1,y2,lbl,col){
+      const my=(y1+y2)/2;
+      el('line',{x1:cx,y1:y1,x2:cx,y2:my-4,stroke:col,'stroke-width':1.2});
+      el('line',{x1:cx-8,y1:my-4,x2:cx+8,y2:my-4,stroke:col,'stroke-width':2});
+      el('line',{x1:cx-8,y1:my+4,x2:cx+8,y2:my+4,stroke:col,'stroke-width':2});
+      el('line',{x1:cx,y1:my+4,x2:cx,y2:y2,stroke:col,'stroke-width':1.2});
+      el('text',{x:cx+12,y:my+4,'font-family':'JetBrains Mono','font-size':6,fill:col},lbl);
+    }
+    // R1 4.7kΩ — SDA (G9, leftIdx14) pull-up → 3V3
+    const sdaPuY = PIN_Y0 + 14 * PIN_DY; // 380
+    rV(462, BUS_3V3_Y, sdaPuY, 'R1 4.7k', '#44ccaa');
+    el('circle',{cx:462,cy:sdaPuY,r:3,fill:'#44ccaa'});
+    // R2 4.7kΩ — SCL (G8, leftIdx11) pull-up → 3V3
+    const sclPuY = PIN_Y0 + 11 * PIN_DY; // 314
+    rV(453, BUS_3V3_Y, sclPuY, 'R2 4.7k', '#33aa88');
+    el('circle',{cx:453,cy:sclPuY,r:3,fill:'#33aa88'});
+    // R6 1kΩ — UART TX (G17) → DFPlayer RX (horizontal, on UART line)
+    rH(DFP_PIN_X + 10, PIN_XL - 10, DFP_PIN_Y0, 'R6 1k', '#ff9922');
+    // R7 10kΩ — SharedRST (G12, leftIdx17) pull-up → 3V3
+    const rstPuX = 477, rstPinY2 = PIN_Y0 + 17 * PIN_DY; // y=446
+    rV(rstPuX, BUS_3V3_Y, rstPinY2, 'R7 10k', '#ffaa44');
+    el('line',{x1:rstPuX,y1:rstPinY2,x2:PIN_XL,y2:rstPinY2,stroke:'#ffaa44','stroke-width':1});
+    el('circle',{cx:PIN_XL,cy:rstPinY2,r:3,fill:'#ffaa44'});
+    // C4 10nF — SharedRST debounce (G12 → GND)
+    cV(rstPuX - 14, rstPinY2, BUS_GND_Y, 'C4 10n', '#ffaa44');
+    el('circle',{cx:rstPuX-14,cy:rstPinY2,r:2.5,fill:'#ffaa44'});
+    el('line',{x1:rstPuX-14,y1:rstPinY2,x2:rstPuX,y2:rstPinY2,stroke:'#ffaa44','stroke-width':1});
+    el('circle',{cx:rstPuX-14,cy:BUS_GND_Y,r:3,fill:'#556'});
+    // C1-C3 bypass caps: horizontal cap symbol, branches from VCC line, ends at GND symbol
+    function gndSym(x, y) {
+      el('line',{x1:x-7,y1:y,   x2:x+7,y2:y,   stroke:'#556','stroke-width':1.5});
+      el('line',{x1:x-4,y1:y+4, x2:x+4,y2:y+4, stroke:'#556','stroke-width':1.2});
+      el('line',{x1:x-1,y1:y+8, x2:x+1,y2:y+8, stroke:'#556','stroke-width':1});
+    }
+    function capH(vccX, vccY, lbl, col) {
+      // branch from VCC line rightward
+      el('circle',{cx:vccX,cy:vccY,r:3,fill:col}); // junction on VCC line
+      el('line',{x1:vccX,y1:vccY,x2:vccX+12,y2:vccY,stroke:col,'stroke-width':1.2});
+      el('line',{x1:vccX+12,y1:vccY-8,x2:vccX+12,y2:vccY+8,stroke:col,'stroke-width':2});
+      el('line',{x1:vccX+18,y1:vccY-8,x2:vccX+18,y2:vccY+8,stroke:col,'stroke-width':2});
+      el('line',{x1:vccX+18,y1:vccY,x2:vccX+30,y2:vccY,stroke:col,'stroke-width':1.2});
+      el('line',{x1:vccX+30,y1:vccY,x2:vccX+30,y2:vccY+8,stroke:'#556','stroke-width':1.2});
+      gndSym(vccX+30, vccY+8);
+      el('text',{x:vccX+15,y:vccY-12,'text-anchor':'middle','font-family':'JetBrains Mono','font-size':5.5,fill:col},lbl);
+    }
+    // C1 — LoRa VCC line at x=LORA_X+5, branch at y=80
+    capH(LORA_X + 5, 80, 'C1 100n', '#4488ff');
+    // C2 — рисуется у BU03 (VCC справа → GND ключа)
+    // C3 — DFPlayer 5V line: segment x=250, from DFP_Y(255) up to DFP_Y-15(240)
+    // Branch at midpoint y=248, cap goes rightward
+    capH(250, DFP_Y - 8, 'C3 100n', '#bb88ff');
+  </script>
+
+  <script>
+    const svgEl = document.getElementById('s');
+    let vb = { x: 0, y: 0, w: 1550, h: 1300 };
+    let isPan = false, startPt = { x: 0, y: 0 };
+
+    function updateVB() {
+      svgEl.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+    }
+
+    svgEl.addEventListener('wheel', e => {
+      e.preventDefault();
+      const scale = e.deltaY > 0 ? 1.1 : 0.9;
+      const rect = svgEl.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) / rect.width;
+      const my = (e.clientY - rect.top) / rect.height;
+      const nw = vb.w * scale, nh = vb.h * scale;
+      vb.x += (vb.w - nw) * mx;
+      vb.y += (vb.h - nh) * my;
+      vb.w = nw; vb.h = nh;
+      updateVB();
+    }, { passive: false });
+
+    svgEl.addEventListener('mousedown', e => {
+      isPan = true; startPt = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener('mousemove', e => {
+      if (!isPan) return;
+      const rect = svgEl.getBoundingClientRect();
+      const dx = (e.clientX - startPt.x) / rect.width * vb.w;
+      const dy = (e.clientY - startPt.y) / rect.height * vb.h;
+      vb.x -= dx; vb.y -= dy;
+      startPt = { x: e.clientX, y: e.clientY };
+      updateVB();
+    });
+    window.addEventListener('mouseup', () => isPan = false);
+    svgEl.addEventListener('dblclick', () => {
+      vb = { x: 0, y: 0, w: 1550, h: 1300 };
+      updateVB();
+    });
+  </script>
+</body>
+
+</html>

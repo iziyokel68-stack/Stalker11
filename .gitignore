@@ -1,0 +1,27 @@
+# Сборка
+mobilny_programmat/build/
+mobilny_programmat/.dart_tool/
+programmat_pc/build/
+programmat_pc/programmer_state.json
+*.apk
+
+# KiCad локальные снапшоты и отчёты
+**/.history/
+*.kicad_prl
+*-backups/
+*.dsn
+*.ses
+ERC.rpt
+DRC.rpt
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# STALKER App — база событий (переносится на USB, не в git)
+stalker_app/events/

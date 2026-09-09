@@ -1,0 +1,203 @@
+# Список компонентов — Stalker
+
+# Пины: MASTER_SPECIFICATION.md ч.3
+# Схема ПДА: hardware/schematic.html
+# Потребление: hardware/POTREBLENIE.pdf
+# Решения 11.06.2026: см. REPORTS.md v6.5 и MASTER_SPEC «Принятые решения»
+# PCB v3.0 (17.06.2026): STALKER_PDA_v3.0/ — LOGIC + POWER
+# Терминалы TXN (22.06.2026): Cashier_ESP32.ino, eeprom_txn.h — кабель кассы на CH1
+
+# LoRa стенд (9.06.2026): 2× Ra-01 433 МГц — 1 неисправен, заказать замену
+# Антенна LoRa 433 МГц (пружина/шток на Ra-01) — 1 на каждый Ra-01 с TX
+# Breadboard: 2× ESP32 DevKit — test_firmware/LoRa_Test_Sender|Receiver/
+# Библиотека LoRa (Sandeep Mistry) — GitHub ZIP, не Library Manager (403)
+
+
+
+## ПДА (плата + корпус)
+
+ESP32-S3-N16R8 DevKitC-1 — 1
+
+TFT SPI 2.4" M024-240320 (ILI9341/9342-style) 320x240 — 1
+# Прошивка: tft_panel.h — setRotation(1) + MADCTL 0x88 (без MV). Полоса 80px = неверный rotation/MADCTL.
+
+LoRa SX1278 Ra-01 433MHz — 1
+
+Антенна LoRa 433 МГц (пружина/шток на Ra-01) — 1
+
+UWB BU03-Kit (STM32 + DW3000, UART AT) — 1
+
+DFPlayer Mini — 1
+
+TCA9548A модуль — 1
+
+Разъёмы TRRS PJ-392 3.5 mm — 4    # CH2, CH4–6 (картриджи на плате)
+
+Шлейф J_TRS 4-pin — 1    # CH1: кабель кассы/терминалов (TXN @0x80); refdes на PCB — J_TRS_CH4
+
+Разъём межплатный J_INTER (2.54 mm) — 1 пара    # LOGIC ↔ POWER
+
+Кнопки тактовые 6x6 — 4
+
+Тумблер вкл/выкл — 3    # PWR (разрыв АКБ) + SND (разрыв 5V→DFPlayer) + VIB (разрыв 5V→вибро); НЕ на GPIO ESP
+
+Тумблер вкл/выкл/вкл — 1    # BL (разрыв 3V3→LED TFT); НЕ на GPIO ESP
+
+IP2312 модуль зарядный — 1    # опционально; на POWER PCB v3.0 не разведён
+
+Повышающий DC-DC TPS63020 (→3.3V) — 1
+
+Понижающий DC-DC TPS63020 (→5V) — 1
+
+Динамик 8 Ом 1.5 Вт 24x15 мм — 1
+
+Вибромотор LRA — 1    # 5V через физический ключ VIB; импульсы G21→2N2222 (не управление вкл/выкл)
+
+# BU03 POWER KEY (POWER PCB): G42 → 220 Ω → Q2 2N2222 → gate AO3401;
+# R8 10 kΩ gate→3.3V; AO3401 S→3.3V, D→BU03 VCC; C2 100 nF у VCC/GND модуля (см. schematic.html)
+
+2N2222 TO-92 — 2    # Q1 вибро G21 + Q2 BU03_PWR G42
+
+P-MOS AO3401 SOT-23 (или аналог) — 1    # high-side ключ 3.3V → VCC BU03
+
+MicroSD — 1
+
+Аккумулятор Li-Po — 1
+
+Светодиод красный 5 мм — 1
+
+Светодиод зелёный 5 мм — 1
+
+
+
+## Картриджи (внешние, НЕ на основной PCB)
+
+EEPROM 24LC256 DIP-8 — 5    # чипы в TRRS-модулях, вставляются в гнёзда платы
+
+
+
+## Пассивка (обвязка ПДА)
+
+# Детальная привязка refdes / плата / silk: MASTER_SPECIFICATION.md §3 «Пассивка и обвязка LOGIC/POWER»
+# Эталон номиналов: hardware/schematic.html
+
+Резистор 4.7 кОм — 2    # R1 SDA · R2 SCL — LOGIC (silk R4.7K)
+Резистор 220 Ом — 3     # база Q1 G21 · база Q2 G42 · LED G15 — POWER×2 + LOGIC×1
+Резистор 100 Ом — 1     # LED G16 — LOGIC (silk R220 cluster, номинал 100!)
+Резистор 1 кОм — 1      # R6 UART TX G17→DFPlayer — POWER (silk R 1K)
+Резистор 10 кОм — 2     # R7 RST G12 LOGIC · R8 gate AO3401 POWER (silk R10K)
+
+Конденсатор 100 нФ — 3  # C1 LoRa POWER · C2 BU03 POWER · C3 DFPlayer POWER
+Конденсатор 10 нФ — 1   # C4 debounce RST G12 — LOGIC (silk C 10n)
+
+2N2222 TO-92 — 2        # Q1 вибро POWER · Q2 BU03_PWR POWER (silk оба Q1 — второй = Q2)
+P-MOS AO3401 SOT-23 — 1 # high-side BU03 VCC — POWER (silk Q PMOS)
+Диод 1N5819 — 1         # D1 flyback вибро — POWER (silk DIOD)
+
+Гребёнка Female 2.54 мм 22pin — 2  # ESP32-S3 — LOGIC
+
+
+
+## Разъёмы корпуса (на PCB, провода к периферии)
+
+J_TFT — 1    # дисплей ILI9341 (LOGIC)
+
+J_BTN — 1    # кнопки (LOGIC)
+
+J_SPK — 1    # динамик (POWER)
+
+J_VIB — 1    # вибромотор LRA (POWER)
+
+JST BAT — 1    # аккумулятор Li-Po (POWER)
+
+
+
+## На плате (модули)
+
+ESP32-S3, LoRa, BU03-Kit, DFPlayer, TCA9548A, 4× TRRS + J_TRS, J_INTER, TPS63020×2,
+
+2× 2N2222, AO3401 P-MOS (BU03 POWER KEY на POWER), 1N5819, резисторы, конденсаторы,
+
+J_TFT/J_BTN/J_SPK/J_VIB/JST BAT.
+
+
+
+## На корпусе (провода к плате)
+
+TFT, кнопки, физические ключи PWR/SND/VIB/BL, LED, вибро, динамик, аккумулятор.
+
+
+
+## Терминалы (вне основной PCB)
+
+ESP32-C3 SuperMini — 1    # касса; та же плата, что Chip_Programmer
+
+EEPROM 24LC256 в настольной кассете — 1    # TXN-блок @0x80
+
+Кабель 4-проводной SDA/SCL/3V3/GND к CH1 ПДА — 1
+
+# опционально для стенда: TCA9548A на стойке кассира — 1
+
+
+
+## Аномалия (полевое устройство, cat=0)
+
+# Пины LoRa / BU03 — те же, что у ПДА (MASTER_SPECIFICATION.md ч.3)
+
+ESP32-S3-N16R8 DevKitC-1 — 1
+
+UWB BU03-Kit (STM32 + DW3000, UART AT) — 1
+
+LoRa SX1278 Ra-01 433MHz — 1
+
+IP2312 модуль зарядный — 1
+
+Повышающий DC-DC TPS63020 (→3.3V) — 1    # ESP + LoRa + BU03, 5V не нужен
+
+Аккумулятор Li-Po — 1
+
+# BU03 POWER KEY: G42 → 220 Ω → 2N2222 → gate AO3401; R8 10 kΩ; C2 100 nF у модуля
+
+2N2222 TO-92 — 1    # Q2 BU03_PWR G42
+
+P-MOS AO3401 SOT-23 (или аналог) — 1    # high-side ключ 3.3V → VCC BU03
+
+
+
+## Зелёная зона (полевое устройство, cat=1)
+
+# Пины LoRa / BU03 — те же, что у ПДА; LED зелёный — G16 (как на ПДА)
+
+ESP32-S3-N16R8 DevKitC-1 — 1
+
+UWB BU03-Kit (STM32 + DW3000, UART AT) — 1
+
+LoRa SX1278 Ra-01 433MHz — 1
+
+IP2312 модуль зарядный — 1
+
+Повышающий DC-DC TPS63020 (→3.3V) — 1
+
+Аккумулятор Li-Po — 1
+
+Светодиод зелёный 5 мм — 1    # индикация зоны, G16
+
+2N2222 TO-92 — 1    # Q2 BU03_PWR G42
+
+P-MOS AO3401 SOT-23 (или аналог) — 1
+
+
+
+## Пассивка (аномалия / ЗЗ)
+
+# Только обвязка LoRa + BU03 POWER KEY (пины как на ПДА)
+
+Резистор 220 Ом — 1    # база Q2 BU03_PWR G42
+
+Резистор 10 кОм — 2    # R7 LoRa RST G12 + R8 подтяжка gate AO3401
+
+Конденсатор 100 нФ — 2  # C1 LoRa VCC · C2 BU03 VCC/GND у модуля (bypass, не на шине 3.3V)
+
+Конденсатор 10 нФ — 1  # debounce LoRa RST G12
+
+Резистор 100 Ом — 1    # только ЗЗ: LED зелёный G16
