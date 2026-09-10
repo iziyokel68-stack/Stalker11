@@ -2,7 +2,7 @@
 
 > Прошивка: `proshivki/Terminal/Terminal_ESP32/Terminal_ESP32.ino` v1.0  
 > Карта каналов: `proshivki/common/mux_channels.h`  
-> ПДА опрашивает **CH1** (`MUX_CH_UNIVERSAL`) каждые ~200 ms.
+> ПДА опрашивает **CH0** (`MUX_CH_UNIVERSAL`) каждые ~200 ms.
 
 ## Роли терминала
 
@@ -87,4 +87,4 @@ TXN_WAIT:timeout_ms=30000
 
 - `proshivki/Terminal/Terminal_ESP32/` — прошивка  
 - `proshivki/Cashier/README_MOVED.md` — старый путь (deprecated)  
-- `test_firmware/EEPROM_TCA_Test/README_EEPROM_TCA_Test.md` — TCA/EEPROM на CH1
+- `test_firmware/EEPROM_TCA_Test/README_EEPROM_TCA_Test.md` — TCA/EEPROM на CH0

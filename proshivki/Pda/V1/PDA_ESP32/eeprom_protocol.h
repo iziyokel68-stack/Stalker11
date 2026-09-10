@@ -5,14 +5,15 @@
  * artifacts, consumables) use the same physical EEPROM chip on TCA channels.
  * Combat / radiation / safe zones stay on ESP-NOW — not covered here.
  *
- * Two interaction patterns on CH1 (MUX_CH_UNIVERSAL):
+ * Two interaction patterns on CH0 (MUX_CH_UNIVERSAL):
  *   A) Chip handoff — terminal or programmer writes chip header @0x00; player
- *      inserts cartridge; PDA reads header on insert (applyChip — Phase 5).
+ *      inserts cartridge; PDA reads header on insert (applyChip).
  *   B) Cable / desk cassette — shared EEPROM; terminal writes TXN block @0x80;
  *      PDA polls every ~200 ms (see eeprom_txn.h state machine).
  *
- * CH2: armor; CH4..CH6: artifacts — chip header only (no TXN block).
- * CH0, CH3: reserved (mux_channels.h).
+ * CH2, CH3, CH5, CH6: universal equipment slots — chip header only (no TXN).
+ * Type (armor / artifact / other) comes from the chip header, not the channel.
+ * CH1, CH4: reserved (mux_channels.h).
  *
  * Memory map (24LC256, 32 KiB):
  *

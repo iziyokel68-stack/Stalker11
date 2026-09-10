@@ -1,5 +1,5 @@
 /**
- * S.T.A.L.K.E.R. — тест ПДА: опрос TXN на CH1 (касса) + проверка CH2 (броня)
+ * S.T.A.L.K.E.R. — тест ПДА: опрос TXN на CH0 (касса) + проверка CH2 (слот)
  *
  * Минимальная прошивка БЕЗ дисплея, ESP-NOW, NVS.
  * Повторяет pollEepromTransaction() из PDA_ESP32.ino для стенда с кассой.
@@ -12,14 +12,14 @@
  *
  * Команды Serial:
  *   HELP              — справка
- *   SCAN              — I2C scan главная шина + CH1, CH2
- *   DUMP              — прочитать TXN-блок @0x80 на CH1
+ *   SCAN              — I2C scan главная шина + CH0, CH2
+ *   DUMP              — прочитать TXN-блок @0x80 на CH0
  *   STATUS            — деньги, уровень, XP, last txn
  *   SET_MONEY:1000    — тестовый баланс
  *   SET_LEVEL:2       — уровень (магазин с 2+, банк с 3+)
  *   RESET_TXN         — сброс lastProcessedTxnId
  *
- * Авто: каждые 200 ms опрос CH1 — PURCHASE, BANK, QUEST.
+ * Авто: каждые 200 ms опрос CH0 — PURCHASE, BANK, QUEST.
  */
 
 #include <Wire.h>
@@ -39,7 +39,7 @@
 #define TCA_ADDR     TCA_ADDR_DEFAULT
 #define EEPROM_DEV   EEPROM_ADDR_DEFAULT
 #define CH_TXN       MUX_CH_UNIVERSAL
-#define CH_ARMOR     MUX_CH_ARMOR
+#define CH_ARMOR     MUX_CH_SLOT_1
 #define EEPROM_WR_DLY 5
 #define TXN_POLL_MS 200
 
@@ -353,10 +353,10 @@ void pollTxn() {
 
 void cmdHelp() {
   Serial.println(F(
-    "PDA_TXN_Test — опрос CH1 для кассы\n"
+    "PDA_TXN_Test — опрос CH0 для кассы\n"
     "  HELP  SCAN  DUMP  STATUS\n"
     "  SET_MONEY:1000  SET_LEVEL:2  RESET_TXN\n"
-    "Auto poll CH1 every 200ms: PURCHASE, BANK, QUEST"));
+    "Auto poll CH0 every 200ms: PURCHASE, BANK, QUEST"));
 }
 
 void handleSerial() {
@@ -391,7 +391,7 @@ void setup() {
   Wire.setClock(100000);
   Serial.println(F("=== PDA TXN Test (minimal) ==="));
   Serial.printf("Board: %s | I2C SDA=%d SCL=%d\n", BOARD_LABEL, I2C_SDA, I2C_SCL);
-  Serial.printf("CH1=universal/TXN  CH2=armor | poll=%ums\n", TXN_POLL_MS);
+  Serial.printf("CH0=universal/TXN  CH2=slot | poll=%ums\n", TXN_POLL_MS);
   cmdScan();
   cmdStatus();
   cmdHelp();

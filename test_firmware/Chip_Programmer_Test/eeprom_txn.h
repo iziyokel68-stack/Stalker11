@@ -2,7 +2,7 @@
  * S.T.A.L.K.E.R. — Shared EEPROM terminal↔PDA transaction protocol v1
  *
  * Region: 0x0080..0x00A3 (36 bytes), separate from game chip header 0x00..0x25.
- * Used by cashier, ATM, quest board, admission desk — any CH1 cable terminal.
+ * Used by cashier, ATM, quest board, admission desk — any CH0 cable terminal.
  * Full memory map: eeprom_protocol.h
  *
  * Flow:
@@ -10,9 +10,9 @@
  *   2. PDA sees PENDING, sets TXN_PROCESSING, applies op_type handler, writes result.
  *   3. Terminal polls until terminal state; shows result; resets to TXN_IDLE.
  *
- * Cable mode (no chip move): same EEPROM at desk; 4-wire to PDA TCA CH1.
+ * Cable mode (no chip move): same EEPROM at desk; 4-wire to PDA TCA CH0.
  * Terminal ESP32 uses direct I2C to the local cassette; PDA selects
- * MUX_CH_UNIVERSAL (CH1) on its TCA.
+ * MUX_CH_UNIVERSAL (CH0) on its TCA.
  * Electrical: one master at a time; protocol state machine avoids collisions.
  *
  * Field semantics (common 36-byte block):
@@ -24,7 +24,8 @@
  *   balance    — filled by PDA: player RUB after operation
  *   result     — TXN_RESULT_* 
  *   paid       — actual debit/credit applied (after discount)
- *   reserved   — quest_id prefix (8 bytes ASCII, NUL-padded) for TXN_OP_QUEST
+ *   reserved   — quest_id prefix (8 bytes ASCII) for TXN_OP_QUEST;
+ *                assigned PDA UID prefix for TXN_OP_REGISTER (YYYYMMDD)
  */
 #ifndef STALKER_EEPROM_TXN_H
 #define STALKER_EEPROM_TXN_H
@@ -49,12 +50,14 @@
 #define TXN_OP_PURCHASE       0
 #define TXN_OP_BANK           1   // deposit / withdraw (flags)
 #define TXN_OP_QUEST          2   // accept or turn-in (flags)
-#define TXN_OP_ADMIT          3   // session admit (cashier / master terminal via CH1 TXN)
+#define TXN_OP_ADMIT          3   // session admit (cashier / master terminal via CH0 TXN)
 #define TXN_OP_ATM            4   // alias semantics for BANK + transfer code
+#define TXN_OP_REGISTER       5   // master desk: assign player ID + UID via cable
 
 #define TXN_FLAG_DISCOUNT       0x01  // set by PDA when rank discount applied
 #define TXN_FLAG_BANK_DEPOSIT   0x02  // BANK: deposit (else withdraw)
 #define TXN_FLAG_QUEST_COMPLETE 0x04  // QUEST: turn-in (else accept new task)
+#define TXN_FLAG_QUEST_HIDDEN   0x08  // QUEST: hidden (needs LVL_HIDDEN_QUEST)
 
 #define TXN_RESULT_OK                 0
 #define TXN_RESULT_INSUFFICIENT_FUNDS 1
@@ -190,6 +193,18 @@ static inline void txn_build_quest(uint8_t *block, uint32_t txn_id, uint16_t que
 /** Terminal: session admit request (master desk). */
 static inline void txn_build_admit(uint8_t *block, uint32_t txn_id) {
     txn_build_common(block, txn_id, TXN_OP_ADMIT, 0, 0, 0);
+}
+
+/** Master CHIP_BOX: register PDA over shared EEPROM + 4-wire. item_id = player ID. */
+static inline void txn_build_register(uint8_t *block, uint32_t txn_id, uint16_t player_id,
+                                      const char *uid_prefix) {
+    txn_build_common(block, txn_id, TXN_OP_REGISTER, 0, player_id, 0);
+    if (uid_prefix) {
+        size_t n = strlen(uid_prefix);
+        if (n > 8) n = 8;
+        memcpy(block + TXN_OFF_RESERVED, uid_prefix, n);
+    }
+    txn_recalc_crc(block);
 }
 
 static inline void txn_set_state(uint8_t *block, uint8_t state) {

@@ -102,7 +102,7 @@ def rub_reward_on_level_up(lvl: int) -> int:
 
 
 class ActiveTask:
-    """Активное задание (квест-чип CH1). Минимальная модель для EEPROM/симулятора."""
+    """Активное задание (квест-чип CH0). Минимальная модель для EEPROM/симулятора."""
 
     def __init__(self, task_id: str, title: str, short_desc: str, status: str = "active",
                  rub_reward: int = 0):
@@ -791,20 +791,31 @@ class Player:
         return {"type": "error", "text": "НЕИЗВЕСТНЫЙ ЧИП"}
 
     def insert_artifact(self, slot_index, item: ItemChip):
-        """Вставить чип в слот (Броня: 0, Арты: 3-5)"""
+        """Вставить чип в слот экипировки. Слоты универсальные (как CH2/3/5/6):
+        тип берётся с чипа, не с номера слота. Слот 1 симулятора = расходник CH0."""
         if slot_index < 0 or slot_index >= len(self.slots):
             return {"type": "error", "text": "НЕТ ТАКОГО СЛОТА"}
 
-        # Проверка ТИПА для специализированного слота Брони (Слот 0)
-        if slot_index == 0 and item.item_type != ItemChip.TYPE_ARMOR:
-            return {"type": "error", "text": "ОШИБКА: ТОЛЬКО БРОНЯ!"}
-        
-        # Проверка ТИПА для слотов Артов (Слоты 2, 3, 4)
-        if slot_index >= 2 and item.item_type != ItemChip.TYPE_ARTIFACT:
-             return {"type": "error", "text": "ОШИБКА: ТОЛЬКО АРТЕФАКТЫ!"}
+        if slot_index == 1:
+            return {"type": "error", "text": "РАСХОДНИК — СЛОТ CH0"}
 
         if self.slots[slot_index] is not None:
             return {"type": "error", "text": "СЛОТ ЗАНЯТ!"}
+
+        armor_count = sum(1 for s in self.slots if s and s.item_type == ItemChip.TYPE_ARMOR)
+        art_count = sum(1 for s in self.slots if s and s.item_type == ItemChip.TYPE_ARTIFACT)
+
+        if item.item_type == ItemChip.TYPE_ARMOR:
+            if self.level < 5:
+                return {"type": "error", "text": "БРОНЯ С УР.5"}
+            if armor_count >= 1:
+                return {"type": "error", "text": "БРОНЯ УЖЕ ЕСТЬ"}
+        elif item.item_type == ItemChip.TYPE_ARTIFACT:
+            need = 2 if art_count <= 0 else 7 if art_count == 1 else 10 if art_count == 2 else 255
+            if need >= 255:
+                return {"type": "error", "text": "ЛИМИТ АРТОВ"}
+            if self.level < need:
+                return {"type": "error", "text": f"АРТ С УР.{need}"}
 
         self.slots[slot_index] = item
 

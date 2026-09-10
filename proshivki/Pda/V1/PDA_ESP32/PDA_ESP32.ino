@@ -55,6 +55,7 @@
 // Заголовки в этой же папке (sketch folder)
 #include "eeprom_protocol.h"
 #include "mux_channels.h"
+#include "chip_header.h"
 
 // =====================================================
 // РАСПИНОВКА (ESP32-S3-N16R8) — MASTER_SPECIFICATION §3
@@ -208,12 +209,6 @@ extern DFRobotDFPlayerMini myDFPlayer;
 
 #define MAX_LEVEL 100
 #define REGISTRATION_LEVEL 2
-#define LVL_STORE 2
-#define LVL_ATM 3
-#define LVL_ARTIFACT1 2
-#define LVL_HIDDEN_QUEST 20
-#define LVL_DETECTOR 25 // ДЕТЕКТОР: ур.25+ и пакет аномалии рядом (ESP-NOW) → мигание LED
-#define LVL_GLOBAL_MSG 50
 #define DETECTOR_SIGNAL_TIMEOUT_MS 2500 // индикатор гаснет без пакетов аномалии
 
 struct RankTier {
@@ -277,6 +272,7 @@ struct ActiveTaskStub {
 };
 uint8_t activeTaskCount = 0;
 ActiveTaskStub activeTasks[ACTIVE_TASKS_MAX];
+int8_t selectedRow = 0;
 
 int xpPerLevel(int lvl) {
   if (lvl < 10)
@@ -441,6 +437,7 @@ void noteAnomalyDiscovery(const uint8_t *mac) {
 
 bool canUseStore() { return playerLevel >= LVL_STORE; }
 bool canUseAtm() { return playerLevel >= LVL_ATM; }
+bool canUseArmor() { return playerLevel >= LVL_ARMOR; }
 bool canUseArtifact1() { return playerLevel >= LVL_ARTIFACT1; }
 bool canUseHiddenQuest() { return playerLevel >= LVL_HIDDEN_QUEST; }
 bool canUseDetector() { return playerLevel >= LVL_DETECTOR; }
@@ -462,16 +459,18 @@ bool isAnomalyDetectorActive() {
 bool canUseGlobalMsg() { return playerLevel >= LVL_GLOBAL_MSG; }
 
 // =====================================================
-// EEPROM — терминалы↔ПДА транзакции (CH1 universal, блок @0x80)
+// EEPROM — терминалы↔ПДА транзакции (CH0 universal, блок @0x80)
+// и applyChip() на CH0 + слоты CH2/CH3/CH5/CH6
 // =====================================================
 #define EEPROM_DEV EEPROM_ADDR_DEFAULT
 #define UNIVERSAL_SLOT MUX_CH_UNIVERSAL
 #define EEPROM_WR_DLY 5
-
-// UI inventory row 0..3 → TCA channel (броня, арт 1..3)
-static const uint8_t INV_SLOT_MUX_CH[4] = {
-  MUX_CH_ARMOR, MUX_CH_ARTIFACT_1, MUX_CH_ARTIFACT_2, MUX_CH_ARTIFACT_3
+#define CHIP_HOTPLUG_MS 100
+#define EQ_SLOT_COUNT 4
+static const uint8_t EQ_SLOT_MUX_CH[EQ_SLOT_COUNT] = {
+    MUX_CH_SLOT_1, MUX_CH_SLOT_2, MUX_CH_SLOT_3, MUX_CH_SLOT_4
 };
+static const char *EQ_SLOT_LABEL[EQ_SLOT_COUNT] = {"CH2", "CH3", "CH5", "CH6"};
 
 uint32_t lastProcessedTxnId = 0;
 uint32_t lastTxnPollMs = 0;
@@ -485,8 +484,8 @@ bool tcaSelect(uint8_t channel) {
   return Wire.endTransmission() == 0;
 }
 
-bool eepromWriteByteChUniversal(uint16_t addr, uint8_t val) {
-  if (!tcaSelect(UNIVERSAL_SLOT))
+bool eepromWriteByteCh(uint8_t ch, uint16_t addr, uint8_t val) {
+  if (!tcaSelect(ch))
     return false;
   Wire.beginTransmission(EEPROM_DEV);
   Wire.write((uint8_t)(addr >> 8));
@@ -497,8 +496,8 @@ bool eepromWriteByteChUniversal(uint16_t addr, uint8_t val) {
   return err == 0;
 }
 
-bool eepromReadByteChUniversal(uint16_t addr, uint8_t &val) {
-  if (!tcaSelect(UNIVERSAL_SLOT))
+bool eepromReadByteCh(uint8_t ch, uint16_t addr, uint8_t &val) {
+  if (!tcaSelect(ch))
     return false;
   Wire.beginTransmission(EEPROM_DEV);
   Wire.write((uint8_t)(addr >> 8));
@@ -512,28 +511,48 @@ bool eepromReadByteChUniversal(uint16_t addr, uint8_t &val) {
   return true;
 }
 
-bool eepromReadBlockChUniversal(uint16_t addr, uint8_t *buf, uint8_t len) {
+bool eepromReadBlockCh(uint8_t ch, uint16_t addr, uint8_t *buf, uint8_t len) {
   for (uint8_t i = 0; i < len; i++) {
-    if (!eepromReadByteChUniversal(addr + i, buf[i]))
+    if (!eepromReadByteCh(ch, addr + i, buf[i]))
       return false;
   }
   return true;
 }
 
-bool eepromWriteBlockChUniversal(uint16_t addr, const uint8_t *data, uint8_t len) {
+bool eepromWriteBlockCh(uint8_t ch, uint16_t addr, const uint8_t *data,
+                        uint8_t len) {
   for (uint8_t i = 0; i < len; i++) {
-    if (!eepromWriteByteChUniversal(addr + i, data[i]))
+    if (!eepromWriteByteCh(ch, addr + i, data[i]))
       return false;
   }
   return true;
 }
 
-bool chipPresentOnChUniversal() {
-  if (!tcaSelect(UNIVERSAL_SLOT))
+bool chipPresentOnCh(uint8_t ch) {
+  if (!tcaSelect(ch))
     return false;
   Wire.beginTransmission(EEPROM_DEV);
   return Wire.endTransmission() == 0;
 }
+
+bool eepromWriteByteChUniversal(uint16_t addr, uint8_t val) {
+  return eepromWriteByteCh(UNIVERSAL_SLOT, addr, val);
+}
+
+bool eepromReadByteChUniversal(uint16_t addr, uint8_t &val) {
+  return eepromReadByteCh(UNIVERSAL_SLOT, addr, val);
+}
+
+bool eepromReadBlockChUniversal(uint16_t addr, uint8_t *buf, uint8_t len) {
+  return eepromReadBlockCh(UNIVERSAL_SLOT, addr, buf, len);
+}
+
+bool eepromWriteBlockChUniversal(uint16_t addr, const uint8_t *data,
+                                 uint8_t len) {
+  return eepromWriteBlockCh(UNIVERSAL_SLOT, addr, data, len);
+}
+
+bool chipPresentOnChUniversal() { return chipPresentOnCh(UNIVERSAL_SLOT); }
 
 int calcShopPrice(int basePrice) {
   int disc = getRankDiscountPct();
@@ -705,6 +724,10 @@ void txnHandleQuest(int32_t rubReward, uint16_t questCatId, uint8_t flags,
   }
 
   bool complete = (flags & TXN_FLAG_QUEST_COMPLETE) != 0;
+  if (!complete && (flags & TXN_FLAG_QUEST_HIDDEN) && !canUseHiddenQuest()) {
+    txnFailLevel(o, "СКРЫТЫЙ КВЕСТ");
+    return;
+  }
   if (complete) {
     int idx = findActiveQuest(qid);
     if (idx < 0) {
@@ -880,6 +903,541 @@ void pollEepromTransaction() {
     txnPrintReport(opType, txnId, outcome);
 }
 
+bool ch0TxnBusy() {
+  uint8_t block[TXN_BLOCK_SIZE];
+  if (!eepromReadBlockChUniversal(TXN_EEPROM_BASE, block, TXN_BLOCK_SIZE))
+    return false;
+  if (!txn_validate_block(block))
+    return false;
+  uint8_t st = txn_get_state(block);
+  return st == TXN_STATE_PENDING || st == TXN_STATE_PROCESSING;
+}
+
+struct ChipSlotRt {
+  bool present;
+  bool settled;
+  bool applied;
+  bool rejected;
+  uint8_t type;
+  uint8_t sub;
+  int16_t params[16];
+  char label[12];
+  uint32_t detectMs;
+  uint32_t lastRegenMs;
+};
+
+ChipSlotRt ch0Rt = {};
+ChipSlotRt eqRt[EQ_SLOT_COUNT] = {};
+
+int equipProt[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int stimProt[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint32_t stimUntilMs = 0;
+uint32_t immuneUntilMs = 0;
+int consRegenHp = 0;
+uint32_t consRegenHpUntilMs = 0;
+uint32_t consRegenHpLastMs = 0;
+int consRegenRad = 0;
+uint32_t consRegenRadUntilMs = 0;
+uint32_t consRegenRadLastMs = 0;
+
+const char *chipTypeLabel(uint8_t type, uint8_t sub) {
+  if (type == CHIP_TYPE_ARMOR)
+    return "БРОНЯ";
+  if (type == CHIP_TYPE_ARTIFACT)
+    return "АРТ";
+  if (type == CHIP_TYPE_ADMIN)
+    return "АДМИН";
+  if (type == CHIP_TYPE_CONSUMABLE) {
+    switch (sub) {
+    case CHIP_SUB_HEAL:
+      return "АПТЕЧКА";
+    case CHIP_SUB_ANTIRAD:
+      return "АНТИРАД";
+    case CHIP_SUB_REGEN:
+      return "РЕГЕН";
+    case CHIP_SUB_STIM:
+      return "СТИМ";
+    case CHIP_SUB_RESTORE:
+      return "РЕМОНТ";
+    case CHIP_SUB_UPGRADE:
+      return "УЛУЧШ.";
+    default:
+      return "РАСХОД";
+    }
+  }
+  return "ЧИП";
+}
+
+void clampHP() {
+  if (playerMaxHP < 1)
+    playerMaxHP = 1;
+  if (playerHP > playerMaxHP)
+    playerHP = playerMaxHP;
+  if (playerHP < 0)
+    playerHP = 0;
+}
+
+int protForType(int idx) {
+  int r = innateRes[idx] + equipProt[idx];
+  if (stimUntilMs && millis() < stimUntilMs)
+    r += stimProt[idx];
+  if (r > 100)
+    r = 100;
+  if (r < 0)
+    r = 0;
+  return r;
+}
+
+int countEquippedType(uint8_t type) {
+  int n = 0;
+  for (uint8_t i = 0; i < EQ_SLOT_COUNT; i++) {
+    if (eqRt[i].applied && eqRt[i].type == type)
+      n++;
+  }
+  return n;
+}
+
+bool readChipHeaderCh(uint8_t ch, ChipHeader &hdr, char *nameBuf, uint8_t nameLen) {
+  uint8_t buf[CHIP_HEADER_SIZE];
+  if (!eepromReadBlockCh(ch, 0, buf, CHIP_HEADER_SIZE))
+    return false;
+  if (!chip_parse(buf, &hdr))
+    return false;
+  if (nameBuf && nameLen) {
+    uint8_t ext[CHIP_NAME_MAX];
+    memset(nameBuf, 0, nameLen);
+    if (eepromReadBlockCh(ch, CHIP_OFF_NAME, ext, CHIP_NAME_MAX)) {
+      memcpy(nameBuf, ext, nameLen < CHIP_NAME_MAX ? nameLen - 1 : CHIP_NAME_MAX);
+      nameBuf[nameLen - 1] = '\0';
+    }
+  }
+  return true;
+}
+
+bool chipWriteUsesCh(uint8_t ch, uint8_t uses) {
+  uint8_t buf[CHIP_HEADER_SIZE];
+  if (!eepromReadBlockCh(ch, 0, buf, CHIP_HEADER_SIZE))
+    return false;
+  buf[CHIP_OFF_USES] = uses;
+  uint16_t crc = chip_crc16(buf, CHIP_DATA_SIZE);
+  buf[CHIP_OFF_CRC] = (uint8_t)(crc & 0xFF);
+  buf[CHIP_OFF_CRC + 1] = (uint8_t)(crc >> 8);
+  return eepromWriteBlockCh(ch, 0, buf, CHIP_HEADER_SIZE);
+}
+
+bool consumeChipUse(uint8_t ch, ChipHeader &hdr) {
+  if (hdr.uses == CHIP_USES_INFINITE)
+    return true;
+  if (hdr.uses == 0)
+    return false;
+  hdr.uses--;
+  return chipWriteUsesCh(ch, hdr.uses);
+}
+
+int firstAppliedEqIndex() {
+  if (selectedRow >= 0 && selectedRow < EQ_SLOT_COUNT && eqRt[selectedRow].applied)
+    return selectedRow;
+  for (uint8_t i = 0; i < EQ_SLOT_COUNT; i++) {
+    if (eqRt[i].applied)
+      return (int)i;
+  }
+  return -1;
+}
+
+void applyHealAmount(int amount, bool pct) {
+  int add = pct ? (playerMaxHP * amount) / 100 : amount;
+  playerHP += add;
+  clampHP();
+}
+
+void applyAntiradAmount(int amount, bool pct) {
+  int sub = pct ? (playerMaxRad * amount) / 100 : amount;
+  playerRad -= sub;
+  if (playerRad < 0)
+    playerRad = 0;
+}
+
+bool applyAdminChip(const ChipHeader &hdr, const char *name) {
+  switch (hdr.sub) {
+  case CHIP_ADM_REVIVE:
+    if (playerZombie) {
+      setEvent("ЗОМБИ: СДАТЬСЯ", C_RED);
+      return false;
+    }
+    if (!playerDead) {
+      setEvent("УЖЕ ЖИВ", C_LGRAY);
+      return true;
+    }
+    playerDead = false;
+    playerHP = playerMaxHP;
+    playerRad = 0;
+    setEvent("СВЯЗЬ ВОССТАНОВЛЕНА", C_GREEN);
+    return true;
+  case CHIP_ADM_MONEY:
+    playerMoney += hdr.params[0];
+    {
+      char buf[40];
+      snprintf(buf, sizeof(buf), "АДМИН: %+d RUB", (int)hdr.params[0]);
+      setEvent(buf, C_CYAN);
+    }
+    return true;
+  case CHIP_ADM_LEVEL:
+    if (hdr.params[0])
+      playerLevel = hdr.params[0];
+    if (hdr.params[1]) {
+      playerXP += hdr.params[1];
+      checkLevelUps();
+    }
+    setEvent("АДМИН: УРОВЕНЬ/XP", C_PURPLE);
+    return true;
+  case CHIP_ADM_IMMUNITY:
+    immuneUntilMs = millis() + (uint32_t)hdr.params[0] * 60000UL;
+    setEvent("ИММУНИТЕТ", C_CYAN);
+    return true;
+  case CHIP_ADM_RESET:
+    for (uint8_t i = 0; i < EQ_SLOT_COUNT; i++) {
+      eqRt[i].applied = false;
+      eqRt[i].rejected = false;
+    }
+    memset(equipProt, 0, sizeof(equipProt));
+    playerHP = cfgStartHP;
+    playerMaxHP = cfgMaxHP;
+    playerRad = 0;
+    playerMoney = cfgStartMoney;
+    playerXP = cfgStartXP;
+    playerLevel = cfgStartLevel;
+    setEvent("СБРОС ПДА", C_ORANGE);
+    return true;
+  case CHIP_ADM_NEUTRALIZE:
+    playerHP = 0;
+    playerDead = true;
+    playerDeaths++;
+    setEvent("НЕЙТРАЛИЗАЦИЯ", C_RED);
+    return true;
+  case CHIP_ADM_ADMIT:
+    if (!admitPending) {
+      setEvent("ДОПУСК: УЖЕ ЕСТЬ", C_LGRAY);
+      return true;
+    }
+    admitPending = false;
+    completeRegistration(nullptr);
+    setEvent("ДОПУСК В ИГРУ", C_GREEN);
+    return true;
+  case CHIP_ADM_REGISTER: {
+    char nm[25] = {0};
+    if (name && name[0])
+      strncpy(nm, name, sizeof(nm) - 1);
+    playerEventId = (int)hdr.params[0];
+    completeRegistration(nm[0] ? nm : nullptr);
+    setEvent("РЕГИСТРАЦИЯ", C_GREEN);
+    return true;
+  }
+  default:
+    setEvent("АДМИН: НЕИЗВЕСТНО", C_ORANGE);
+    return false;
+  }
+}
+
+bool applyConsumableChip(const ChipHeader &hdr) {
+  if (!(cfgFuncFlags & (1 << 7)) && hdr.sub != CHIP_SUB_RESTORE &&
+      hdr.sub != CHIP_SUB_UPGRADE) {
+    setEvent("РАСХОДНИКИ ВЫКЛ", C_ORANGE);
+    return false;
+  }
+  switch (hdr.sub) {
+  case CHIP_SUB_HEAL:
+    applyHealAmount(hdr.params[0], hdr.params[1] != 0);
+    setEvent("АПТЕЧКА", C_GREEN);
+    return true;
+  case CHIP_SUB_ANTIRAD:
+    applyAntiradAmount(hdr.params[0], hdr.params[1] != 0);
+    setEvent("АНТИРАД", C_GREEN);
+    return true;
+  case CHIP_SUB_REGEN:
+    consRegenHp = hdr.params[0];
+    consRegenHpUntilMs = millis() + (uint32_t)hdr.params[2] * 1000UL;
+    consRegenHpLastMs = millis();
+    consRegenRad = hdr.params[3];
+    consRegenRadUntilMs = millis() + (uint32_t)hdr.params[5] * 1000UL;
+    consRegenRadLastMs = millis();
+    setEvent("РЕГЕНЕРАТОР", C_GREEN);
+    return true;
+  case CHIP_SUB_STIM:
+    for (int i = 0; i < 8; i++)
+      stimProt[i] = hdr.params[i];
+    stimUntilMs = millis() + (uint32_t)hdr.params[8] * 1000UL;
+    setEvent("СТИМУЛЯТОР", C_YELLOW);
+    return true;
+  case CHIP_SUB_RESTORE: {
+    int idx = firstAppliedEqIndex();
+    if (idx < 0) {
+      setEvent("НЕТ ПРЕДМЕТА", C_ORANGE);
+      return false;
+    }
+    uint8_t eqCh = EQ_SLOT_MUX_CH[idx];
+    ChipHeader eh;
+    if (!readChipHeaderCh(eqCh, eh, nullptr, 0))
+      return false;
+    if (eh.uses != CHIP_USES_INFINITE) {
+      int add = hdr.params[0];
+      int next = (int)eh.uses + add;
+      if (next > 255)
+        next = 255;
+      chipWriteUsesCh(eqCh, (uint8_t)next);
+    }
+    setEvent("РЕМОНТ", C_GREEN);
+    return true;
+  }
+  case CHIP_SUB_UPGRADE: {
+    int idx = firstAppliedEqIndex();
+    if (idx < 0) {
+      setEvent("НЕТ ПРЕДМЕТА", C_ORANGE);
+      return false;
+    }
+    int addHp = hdr.params[0];
+    if (addHp > 250)
+      addHp = 250;
+    if (eqRt[idx].type == CHIP_TYPE_ARMOR) {
+      eqRt[idx].params[10] += addHp;
+      playerMaxHP += addHp;
+      playerHP += addHp;
+      clampHP();
+    }
+    int pct = hdr.params[1];
+    if (pct) {
+      for (int i = 0; i < 8; i++) {
+        int delta = eqRt[idx].params[i] * pct / 100;
+        eqRt[idx].params[i] += delta;
+        equipProt[i] += delta;
+      }
+    }
+    setEvent("УЛУЧШЕНИЕ", C_GREEN);
+    return true;
+  }
+  default:
+    setEvent("РАСХОД: НЕИЗВЕСТНО", C_ORANGE);
+    return false;
+  }
+}
+
+void applyEquipmentBonuses(ChipSlotRt &st, bool add) {
+  int sign = add ? 1 : -1;
+  if (st.type == CHIP_TYPE_ARMOR) {
+    for (int i = 0; i < 8; i++)
+      equipProt[i] += sign * st.params[i];
+    int bonus = st.params[10];
+    playerMaxHP += sign * bonus;
+    if (add)
+      playerHP += bonus;
+    clampHP();
+  } else if (st.type == CHIP_TYPE_ARTIFACT) {
+    for (int i = 0; i < 7; i++)
+      equipProt[i] += sign * st.params[2 + i];
+    equipProt[7] += sign * st.params[9];
+  }
+}
+
+void unapplyEquipment(ChipSlotRt &st) {
+  if (!st.applied)
+    return;
+  applyEquipmentBonuses(st, false);
+  st.applied = false;
+}
+
+bool tryApplyEquipment(uint8_t ch, ChipSlotRt &st, const ChipHeader &hdr) {
+  if (hdr.type == CHIP_TYPE_CONSUMABLE || hdr.type == CHIP_TYPE_ADMIN) {
+    setEvent("НЕ ТОТ СЛОТ — CH0", C_ORANGE);
+    return false;
+  }
+  if (admitPending) {
+    setEvent("НУЖЕН ДОПУСК", C_RED);
+    return false;
+  }
+  if (playerDead) {
+    setEvent("НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+    return false;
+  }
+  if (hdr.type == CHIP_TYPE_ARMOR) {
+    if (!(cfgFuncFlags & (1 << 3))) {
+      setEvent("БРОНЯ ВЫКЛ", C_ORANGE);
+      return false;
+    }
+    if (!canUseArmor()) {
+      setEvent("БРОНЯ С УР.5", C_ORANGE);
+      return false;
+    }
+    if (countEquippedType(CHIP_TYPE_ARMOR) >= CHIP_MAX_ARMOR) {
+      setEvent("БРОНЯ УЖЕ ЕСТЬ", C_ORANGE);
+      return false;
+    }
+  } else if (hdr.type == CHIP_TYPE_ARTIFACT) {
+    if (!(cfgFuncFlags & (1 << 4))) {
+      setEvent("АРТЫ ВЫКЛ", C_ORANGE);
+      return false;
+    }
+    int have = countEquippedType(CHIP_TYPE_ARTIFACT);
+    int need = chip_artifact_level_required(have);
+    if (need >= 255) {
+      setEvent("ЛИМИТ АРТОВ", C_ORANGE);
+      return false;
+    }
+    if (playerLevel < need) {
+      char buf[24];
+      snprintf(buf, sizeof(buf), "АРТ С УР.%d", need);
+      setEvent(buf, C_ORANGE);
+      return false;
+    }
+  } else {
+    setEvent("НЕИЗВЕСТНЫЙ ЧИП", C_ORANGE);
+    return false;
+  }
+
+  st.type = hdr.type;
+  st.sub = hdr.sub;
+  memcpy(st.params, hdr.params, sizeof(st.params));
+  strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+  st.label[sizeof(st.label) - 1] = '\0';
+  applyEquipmentBonuses(st, true);
+  st.applied = true;
+  st.lastRegenMs = millis();
+  if (hdr.type == CHIP_TYPE_ARTIFACT)
+    grantAchievement(ACH_FIRST_ARTIFACT);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%s CH%u", st.label, (unsigned)ch);
+  setEvent(buf, C_GREEN);
+  return true;
+}
+
+bool tryApplyCh0(const ChipHeader &hdr, const char *name) {
+  if (hdr.type == CHIP_TYPE_ARMOR || hdr.type == CHIP_TYPE_ARTIFACT) {
+    setEvent("ВСТАВЬ В СЛОТ 2/3/5/6", C_ORANGE);
+    return false;
+  }
+  if (hdr.type == CHIP_TYPE_ADMIN)
+    return applyAdminChip(hdr, name);
+  if (admitPending) {
+    setEvent("НУЖЕН ДОПУСК", C_RED);
+    return false;
+  }
+  if (playerDead) {
+    setEvent("НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+    return false;
+  }
+  if (hdr.type == CHIP_TYPE_CONSUMABLE)
+    return applyConsumableChip(hdr);
+  setEvent("НЕИЗВЕСТНЫЙ ЧИП", C_ORANGE);
+  return false;
+}
+
+void tickSlotRegen(ChipSlotRt &st) {
+  if (!st.applied || playerDead || admitPending)
+    return;
+  int amount = 0;
+  int intervalSec = 0;
+  if (st.type == CHIP_TYPE_ARMOR) {
+    amount = st.params[8];
+    intervalSec = st.params[9];
+  } else if (st.type == CHIP_TYPE_ARTIFACT) {
+    amount = st.params[0];
+    intervalSec = st.params[1];
+  }
+  if (intervalSec <= 0 || amount == 0)
+    return;
+  uint32_t iv = (uint32_t)intervalSec * 1000UL;
+  if (millis() - st.lastRegenMs < iv)
+    return;
+  st.lastRegenMs = millis();
+  playerHP += amount;
+  clampHP();
+}
+
+void tickConsumableRegen() {
+  uint32_t now = millis();
+  if (consRegenHp && now < consRegenHpUntilMs && now - consRegenHpLastMs >= 1000) {
+    consRegenHpLastMs = now;
+    playerHP += consRegenHp;
+    clampHP();
+  }
+  if (consRegenRad && now < consRegenRadUntilMs && now - consRegenRadLastMs >= 1000) {
+    consRegenRadLastMs = now;
+    playerRad -= consRegenRad;
+    if (playerRad < 0)
+      playerRad = 0;
+  }
+}
+
+void pollOneChipSlot(uint8_t ch, ChipSlotRt &st, bool isCh0) {
+  bool present = chipPresentOnCh(ch);
+  if (!present) {
+    if (st.applied)
+      unapplyEquipment(st);
+    memset(&st, 0, sizeof(st));
+    return;
+  }
+  if (!st.present) {
+    st.present = true;
+    st.detectMs = millis();
+    st.settled = false;
+    return;
+  }
+  if (!st.settled) {
+    if (millis() - st.detectMs < CHIP_HOTPLUG_MS)
+      return;
+    st.settled = true;
+  }
+  if (st.applied) {
+    tickSlotRegen(st);
+    return;
+  }
+  if (st.rejected)
+    return;
+  if (isCh0 && ch0TxnBusy())
+    return;
+
+  ChipHeader hdr;
+  char name[25] = {0};
+  if (!readChipHeaderCh(ch, hdr, name, sizeof(name))) {
+    st.rejected = true;
+    return;
+  }
+  if (hdr.uses == 0) {
+    strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+    st.rejected = true;
+    return;
+  }
+
+  bool ok = false;
+  if (isCh0)
+    ok = tryApplyCh0(hdr, name);
+  else
+    ok = tryApplyEquipment(ch, st, hdr);
+
+  if (!ok) {
+    strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+    st.type = hdr.type;
+    st.sub = hdr.sub;
+    st.rejected = true;
+    needFullRedraw = true;
+    return;
+  }
+  if (isCh0) {
+    consumeChipUse(ch, hdr);
+    strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+    st.type = hdr.type;
+    st.sub = hdr.sub;
+    st.applied = true;
+  }
+  saveState();
+  needFullRedraw = true;
+}
+
+void pollChips() {
+  pollOneChipSlot(UNIVERSAL_SLOT, ch0Rt, true);
+  for (uint8_t i = 0; i < EQ_SLOT_COUNT; i++)
+    pollOneChipSlot(EQ_SLOT_MUX_CH[i], eqRt[i], false);
+  tickConsumableRegen();
+}
+
 // =====================================================
 // NVS — ЗАГРУЗКА / СОХРАНЕНИЕ
 // =====================================================
@@ -888,7 +1446,7 @@ Preferences prefs;
 void loadState() {
   prefs.begin("pda", true);
   playerHP = prefs.getInt("hp", cfgStartHP);
-  playerMaxHP = prefs.getInt("max_hp", cfgMaxHP);
+  playerMaxHP = cfgMaxHP; // бонус брони начисляется с чипов при pollChips
   playerRad = prefs.getInt("rad", 0);
   playerMaxRad = prefs.getInt("max_rad", cfgMaxRad);
   playerMoney = prefs.getInt("money", cfgStartMoney);
@@ -1329,7 +1887,6 @@ U8G2_FOR_ADAFRUIT_GFX u8g2;
 
 int8_t currentPage = 0;
 #define NUM_PAGES 6
-int8_t selectedRow = 0;
 bool needFullRedraw = true;
 
 char eventText[48] = "";
@@ -1657,18 +2214,30 @@ void drawPage1() {
   }
   tft.drawFastHLine(8, 58, SCR_W - 16, C_BORDER);
 
-  const char *slotNames[] = {"БРОНЯ", "АРТ 1", "АРТ 2", "АРТ 3"};
+  const char *slotNames[] = {"CH2", "CH3", "CH5", "CH6"};
+  char ch0line[40];
+  if (ch0Rt.present && ch0Rt.label[0])
+    snprintf(ch0line, sizeof(ch0line), "CH0: %s", ch0Rt.label);
+  else
+    snprintf(ch0line, sizeof(ch0line), "CH0: [---]");
+  printRusStr(12, 62, String(ch0line), ch0Rt.applied ? C_GREEN : C_BORDER);
+
   for (int i = 0; i < 4; i++) {
-    int y = 68 + i * ROW_H;
+    int y = 84 + i * ROW_H;
+    char row[40];
+    if (eqRt[i].applied && eqRt[i].label[0])
+      snprintf(row, sizeof(row), "%s: %s", slotNames[i], eqRt[i].label);
+    else if (eqRt[i].present && eqRt[i].label[0])
+      snprintf(row, sizeof(row), "%s: %s?", slotNames[i], eqRt[i].label);
+    else
+      snprintf(row, sizeof(row), "%s: [---]", slotNames[i]);
     if (selectedRow == i) {
       tft.fillRect(8, y - 2, SCR_W - 16, ROW_H - 2, C_DGRAY);
       printRus(16, y, ">", C_WHITE);
-      String rowTxt = String(slotNames[i]) + ":  [---]";
-      printRusStr(32, y, rowTxt, C_WHITE);
+      printRusStr(32, y, String(row), C_WHITE);
     } else {
       tft.fillRect(8, y - 2, SCR_W - 16, ROW_H - 2, C_BLACK);
-      String rowTxt = String(slotNames[i]) + ":  [---]";
-      printRusStr(24, y, rowTxt, C_BORDER);
+      printRusStr(24, y, String(row), eqRt[i].applied ? C_GREEN : C_BORDER);
     }
   }
 
@@ -1687,8 +2256,8 @@ void drawPage2() {
     tft.fillRect(8, y - 2, SCR_W - 16, 20, C_BLACK);
     printRus(12, y, DMG_NAMES[i], C_WHITE);
 
-    String valTxt = String(innateRes[i]) + "%";
-    uint16_t col = innateRes[i] > 0 ? C_GREEN : C_BORDER;
+    String valTxt = String(protForType(i)) + "%";
+    uint16_t col = protForType(i) > 0 ? C_GREEN : C_BORDER;
     printRusStr(180, y, valTxt, col);
 
     if (inZone && zoneProt[i] > 0) {
@@ -1700,8 +2269,8 @@ void drawPage2() {
   int y = 40 + 7 * 22;
   tft.fillRect(8, y - 2, SCR_W - 16, 20, C_BLACK);
   printRus(12, y, "RAD", C_ORANGE);
-  String radTxt = String(innateRes[7]) + "%";
-  printRusStr(180, y, radTxt, innateRes[7] > 0 ? C_ORANGE : C_BORDER);
+  String radTxt = String(protForType(7)) + "%";
+  printRusStr(180, y, radTxt, protForType(7) > 0 ? C_ORANGE : C_BORDER);
   if (inZone && zoneProt[7] > 0) {
     String zoneTxt = "(+" + String(zoneProt[7]) + "%)";
     printRusStr(230, y, zoneTxt, C_ORANGE);
@@ -1751,13 +2320,13 @@ void drawPage3() {
   drawPageIndicator();
 }
 
-// ─── СТРАНИЦА 4: ЗАДАНИЯ (активные + EEPROM CH1 квесты) ───
+// ─── СТРАНИЦА 4: ЗАДАНИЯ (активные + EEPROM CH0 квесты) ───
 void drawPage4() {
   printRus(108, 8, "ЗАДАНИЯ", C_BORDER);
   tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
   if (activeTaskCount == 0) {
     printRus(72, 80, "НЕТ АКТИВНЫХ", C_DGRAY);
-    printRus(24, 110, "Квест-чип CH1", C_DGRAY);
+    printRus(24, 110, "Квест-чип CH0", C_DGRAY);
   } else {
     for (uint8_t i = 0; i < activeTaskCount && i < ACTIVE_TASKS_MAX; i++) {
       int y = 44 + i * 24;
@@ -2042,7 +2611,7 @@ void loop() {
       int res = 0;
       for (int b = 0; b < 7; b++) {
         if (mask & (1 << b)) {
-          int r = innateRes[b];
+          int r = protForType(b);
           if (isInSafeZone())
             r += zoneProt[b];
           res = max(res, min(100, r));
@@ -2050,6 +2619,8 @@ void loop() {
       }
       int actualDmg = dmg * (100 - res) / 100;
       if (actualDmg < 0)
+        actualDmg = 0;
+      if (immuneUntilMs && millis() < immuneUntilMs)
         actualDmg = 0;
 
       playerHP -= actualDmg;
@@ -2090,12 +2661,14 @@ void loop() {
   if (newRadReceived) {
     newRadReceived = false;
     if (!admitPending && !playerDead && (cfgFuncFlags & (1 << 1))) { // RAD функция включена
-      int radRes = innateRes[7];
+      int radRes = protForType(7);
       if (isInSafeZone())
         radRes += zoneProt[7];
       radRes = min(100, radRes);
       int actualRad = incomingRadAmount * (100 - radRes) / 100;
       if (actualRad < 0)
+        actualRad = 0;
+      if (immuneUntilMs && millis() < immuneUntilMs)
         actualRad = 0;
       playerRad += actualRad;
       if (playerRad > playerMaxRad)
@@ -2171,10 +2744,11 @@ void loop() {
     grantAchievement(ACH_SURVIVE_2H);
   }
 
-  // ─── EEPROM CH1: терминалы (магазин/банк/квест/допуск) ~200 ms ───
+  // ─── EEPROM CH0: терминалы TXN + applyChip (слоты 2/3/5/6) ~200 ms ───
   if (millis() - lastTxnPollMs >= TXN_POLL_MS) {
     lastTxnPollMs = millis();
     pollEepromTransaction();
+    pollChips();
   }
 
   // ─── BU03: опрос дистанции (~750 ms) ───
