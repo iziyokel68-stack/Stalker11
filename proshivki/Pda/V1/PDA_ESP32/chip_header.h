@@ -36,6 +36,10 @@
 #define CHIP_TYPE_ARMOR      1
 #define CHIP_TYPE_ARTIFACT   2
 #define CHIP_TYPE_ADMIN      3
+#define CHIP_TYPE_QUEST      4
+#define CHIP_TYPE_SHOP       5
+
+#define CHIP_ADM_SAVE        8
 
 #define CHIP_SUB_HEAL     0
 #define CHIP_SUB_ANTIRAD  1

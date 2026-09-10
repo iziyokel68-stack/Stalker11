@@ -21,6 +21,8 @@ CHIP_TYPE_CONSUMABLE = 0
 CHIP_TYPE_ARMOR = 1
 CHIP_TYPE_ARTIFACT = 2
 CHIP_TYPE_ADMIN = 3
+CHIP_TYPE_QUEST = 4
+CHIP_TYPE_SHOP = 5
 
 CHIP_SUB_HEAL = 0
 CHIP_SUB_ANTIRAD = 1
@@ -37,6 +39,7 @@ CHIP_ADM_RESET = 4
 CHIP_ADM_NEUTRALIZE = 5
 CHIP_ADM_ADMIT = 6
 CHIP_ADM_REGISTER = 7
+CHIP_ADM_SAVE = 8
 
 CHIP_USES_INFINITE = 255
 CHIP_DATA_SIZE = 0x24
@@ -138,6 +141,10 @@ def can_use_on_channel(
         if chip_type == CHIP_TYPE_CONSUMABLE:
             if player_level < LVL_CONSUMABLE:
                 return False, "МАЛО УРОВНЯ"
+            return True, "OK"
+        if chip_type in (CHIP_TYPE_QUEST, CHIP_TYPE_SHOP):
+            if chip_type == CHIP_TYPE_SHOP and player_level < LVL_STORE:
+                return False, "МАГАЗИН: МАЛО УРОВНЯ"
             return True, "OK"
         return False, "НЕИЗВЕСТНЫЙ ЧИП"
 

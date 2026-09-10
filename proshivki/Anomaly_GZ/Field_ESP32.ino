@@ -314,14 +314,11 @@ void loopSafeZone() {
     // Держит isInSafeZone()=true на ПДА непрерывно
     if (now - lastProtMs >= 2000UL) {
         lastProtMs = now;
+        // Beacon всегда несёт флаг защиты от выброса (val1 = cfgSzEmit)
+        sendPacket(EMITTER_BASE, MSG_SAFE_ZONE, cfgSzEmit, 0, SZ_BEACON_FLAG);
         if (cfgSzProt[protIdx] > 0) {
-            // Пакет защиты: val1=тип(0-7), val2=%, val3=SZ_PROT_FLAG
             sendPacket(EMITTER_BASE, MSG_SAFE_ZONE,
                        protIdx, cfgSzProt[protIdx], SZ_PROT_FLAG);
-        } else {
-            // Нет защиты → beacon с val3=SZ_BEACON_FLAG
-            // ПДА обновляет lastSafeZoneMs, но НЕ трогает szHealAmount
-            sendPacket(EMITTER_BASE, MSG_SAFE_ZONE, 0, 0, SZ_BEACON_FLAG);
         }
         protIdx = (protIdx + 1) % 8;
     }

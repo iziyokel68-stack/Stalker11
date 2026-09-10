@@ -179,8 +179,12 @@ static inline void txn_build_bank(uint8_t *block, uint32_t txn_id, int32_t amoun
 /** Terminal: quest accept or turn-in. quest_id up to 8 chars in reserved. */
 static inline void txn_build_quest(uint8_t *block, uint32_t txn_id, uint16_t quest_cat_id,
                                    int32_t rub_reward, const char *quest_id_prefix,
-                                   bool complete) {
-    uint8_t flags = complete ? TXN_FLAG_QUEST_COMPLETE : 0;
+                                   bool complete, bool hidden) {
+    uint8_t flags = 0;
+    if (complete)
+        flags |= TXN_FLAG_QUEST_COMPLETE;
+    if (hidden)
+        flags |= TXN_FLAG_QUEST_HIDDEN;
     txn_build_common(block, txn_id, TXN_OP_QUEST, rub_reward, quest_cat_id, flags);
     if (quest_id_prefix) {
         size_t n = strlen(quest_id_prefix);

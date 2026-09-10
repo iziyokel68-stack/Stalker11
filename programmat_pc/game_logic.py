@@ -52,24 +52,82 @@ ACHIEVEMENTS: Dict[str, Dict[str, Union[str, int]]] = {
     "level_2":        {"name": "Допуск к Зоне",       "xp": 40,   "rub": 100},
     "anomaly_1":      {"name": "Первый след",         "xp": 150,  "rub": 200},
     "anomaly_5":      {"name": "Разведчик I",         "xp": 200,  "rub": 300},
+    "anomaly_10":     {"name": "Разведчик II",        "xp": 350,  "rub": 500},
+    "anomaly_15":     {"name": "Разведчик III",       "xp": 500,  "rub": 700},
+    "anomaly_20":     {"name": "Разведчик IV",        "xp": 700,  "rub": 1000},
+    "anomaly_30":     {"name": "Картограф Зоны",      "xp": 1000, "rub": 1500},
+    "anomaly_50":     {"name": "Охотник за аномалиями", "xp": 1500, "rub": 2500},
+    "dmg_100":        {"name": "Лёгкий укус",         "xp": 50,   "rub": 80},
+    "dmg_500":        {"name": "Закалённый I",        "xp": 150,  "rub": 200},
+    "dmg_2000":       {"name": "Закалённый II",       "xp": 400,  "rub": 600},
+    "exit_alive":     {"name": "Выход живым",         "xp": 60,   "rub": 100},
+    "anticheat_10":   {"name": "Честный сталкер",     "xp": 100,  "rub": 150},
+    "rad_50":         {"name": "Фон накоплен",        "xp": 40,   "rub": 50},
+    "rad_sick":       {"name": "Лучевая болезнь",     "xp": 80,   "rub": 0},
+    "rad_clean":      {"name": "Чистый",              "xp": 120,  "rub": 200},
+    "antirad_10":     {"name": "Антирад-опыт",        "xp": 100,  "rub": 150},
+    "buy_first":      {"name": "Первый заказ",        "xp": 60,   "rub": 0},
+    "spend_1k":       {"name": "Покупатель I",        "xp": 100,  "rub": 100},
+    "spend_5k":       {"name": "Покупатель II",       "xp": 250,  "rub": 300},
+    "spend_20k":      {"name": "Покупатель III",      "xp": 500,  "rub": 700},
+    "spend_50k":      {"name": "Покупатель IV",       "xp": 800,  "rub": 1200},
+    "spend_100k":     {"name": "Меценат Зоны",        "xp": 1200, "rub": 2000},
+    "sell_first":     {"name": "Первая сделка",       "xp": 60,   "rub": 0},
+    "earn_2k":        {"name": "Торговец I",          "xp": 150,  "rub": 150},
+    "earn_10k":       {"name": "Торговец II",         "xp": 350,  "rub": 400},
+    "earn_50k":       {"name": "Торговец III",        "xp": 700,  "rub": 800},
+    "earn_200k":      {"name": "Барон рынка",         "xp": 1500, "rub": 2500},
     "quest_1":        {"name": "Первое поручение",    "xp": 100,  "rub": 300},
     "quest_5":        {"name": "Исполнитель I",       "xp": 200,  "rub": 500},
     "quest_15":       {"name": "Исполнитель II",      "xp": 400,  "rub": 1000},
+    "quest_30":       {"name": "Исполнитель III",     "xp": 750,  "rub": 2000},
+    "quest_50":       {"name": "Легенда заданий",     "xp": 1250, "rub": 4000},
+    "hidden_1":       {"name": "Теневой след",        "xp": 175,  "rub": 500},
+    "hidden_10":      {"name": "Куратор тайн",        "xp": 600,  "rub": 1800},
     "art_first":      {"name": "Первый артефакт",     "xp": 120,  "rub": 180},
+    "art_types_3":    {"name": "Коллекционер I",      "xp": 250,  "rub": 400},
+    "art_types_10":   {"name": "Коллекционер II",     "xp": 600,  "rub": 900},
     "armor_first":    {"name": "Броненосец",          "xp": 100,  "rub": 150},
-    "death_first":    {"name": "Связь потеряна",     "xp": 0,    "rub": 0},
+    "full_loadout":   {"name": "Полный комплект",     "xp": 300,  "rub": 500},
+    "slots_all":      {"name": "Мастер слотов",       "xp": 400,  "rub": 600},
     "level_10":       {"name": "Десятка",             "xp": 150,  "rub": 200},
     "level_25":       {"name": "Четверть века",       "xp": 300,  "rub": 400},
     "level_50":       {"name": "Полпути",             "xp": 600,  "rub": 800},
+    "level_75":       {"name": "Старожил",            "xp": 1000, "rub": 1200},
     "level_100":      {"name": "Хроникёр Зоны",       "xp": 2000, "rub": 5000},
-    "dmg_100":        {"name": "Лёгкий укус",         "xp": 50,   "rub": 80},
-    "dmg_500":        {"name": "Закалённый I",        "xp": 150,  "rub": 200},
+    "death_first":    {"name": "Связь потеряна",     "xp": 0,    "rub": 0},
+    "revive_first":   {"name": "Второе дыхание",      "xp": 50,   "rub": 100},
+    "survive_2h":     {"name": "Дежурство",           "xp": 25,   "rub": 50},
+    "survive_4h":     {"name": "Марафонец",           "xp": 80,   "rub": 120},
+    "survive_8h":     {"name": "Длинная вылазка",     "xp": 150,  "rub": 250},
+    "deaths_5_live":  {"name": "Упорный",             "xp": 100,  "rub": 200},
+    "transfer_first": {"name": "Перевод",             "xp": 80,   "rub": 0},
+    "bank_10k":       {"name": "Банкир I",            "xp": 200,  "rub": 250},
+    "transfer_5k":    {"name": "Щедрый",              "xp": 150,  "rub": 0},
+    "arena_first":    {"name": "Первый бой",          "xp": 150,  "rub": 200},
+    "arena_win_5":    {"name": "Победитель I",        "xp": 400,  "rub": 600},
+    "arena_win_20":   {"name": "Победитель II",       "xp": 1000, "rub": 1500},
+    "arena_win_50":   {"name": "Чемпион",             "xp": 2500, "rub": 5000},
+    "zz_first":       {"name": "Убежище",             "xp": 40,   "rub": 50},
+    "zz_heal_500":    {"name": "Лечебница",           "xp": 150,  "rub": 200},
+    "detector_first": {"name": "Нюх на аномалию",     "xp": 100,  "rub": 150},
+    "detector_50":    {"name": "Проводник",           "xp": 300,  "rub": 400},
+    "res_plus_1":     {"name": "Шрамы Зоны",          "xp": 80,   "rub": 100},
+    "res_10":         {"name": "Каменная кожа",       "xp": 200,  "rub": 300},
+    "res_50_cap":     {"name": "Предел боли",         "xp": 500,  "rub": 800},
+    "stalker_kraft":  {"name": "Сталкеркрафт",        "xp": 800,  "rub": 1000},
+    "monolith_path":  {"name": "Путь Монолита",       "xp": 1500, "rub": 3000},
+    "zero_deaths_day":{"name": "Ни шагу назад",       "xp": 200,  "rub": 400},
 }
 
-LEVEL_ACH_MAP = {2: "level_2", 10: "level_10", 25: "level_25", 50: "level_50", 100: "level_100"}
-QUEST_COUNT_ACH = {1: "quest_1", 5: "quest_5", 15: "quest_15"}
-ANOMALY_COUNT_ACH = {1: "anomaly_1", 5: "anomaly_5"}
-DMG_TOTAL_ACH = {1000: "dmg_100", 5000: "dmg_500"}
+LEVEL_ACH_MAP = {2: "level_2", 10: "level_10", 25: "level_25", 50: "level_50", 75: "level_75", 100: "level_100"}
+QUEST_COUNT_ACH = {1: "quest_1", 5: "quest_5", 15: "quest_15", 30: "quest_30", 50: "quest_50"}
+HIDDEN_QUEST_ACH = {1: "hidden_1", 10: "hidden_10"}
+ANOMALY_COUNT_ACH = {1: "anomaly_1", 5: "anomaly_5", 10: "anomaly_10", 15: "anomaly_15", 20: "anomaly_20", 30: "anomaly_30", 50: "anomaly_50"}
+DMG_TOTAL_ACH = {100: "dmg_100", 500: "dmg_500", 2000: "dmg_2000"}
+AGONY_PCT = 10
+LVL_HIDDEN_QUEST = 20
+LVL_ARENA = 12
 
 
 def xp_per_level(lvl: int) -> int:
@@ -105,12 +163,13 @@ class ActiveTask:
     """Активное задание (квест-чип CH0). Минимальная модель для EEPROM/симулятора."""
 
     def __init__(self, task_id: str, title: str, short_desc: str, status: str = "active",
-                 rub_reward: int = 0):
+                 rub_reward: int = 0, hidden: bool = False):
         self.id = task_id
         self.title = title
         self.short_desc = short_desc
         self.status = status
         self.rub_reward = max(0, int(rub_reward))
+        self.hidden = bool(hidden)
 
     def to_dict(self) -> dict:
         return {
@@ -243,6 +302,8 @@ class Player:
         self.rank_ready_notified: Set[int] = set()
         self.anomaly_sources: Set[str] = set()
         self.quests_completed = 0
+        self.hidden_quests_completed = 0
+        self.actor_role = 0
         self.total_hp_damage_taken = 0.0
         self._had_first_admit = False
         
@@ -251,6 +312,7 @@ class Player:
         self.emission_duration = 0
         self.last_safe_zone_time = 0.0
         self.emission_strike_tick = 0
+        self.sz_emission_protect = False
 
         # === ЗАЩИТА ЗОНЫ (временная, пока в зоне) ===
         # Индекс 0-6 = HP-типы, 7 = RAD
@@ -284,6 +346,20 @@ class Player:
     def is_combat_locked(self) -> bool:
         """Игровые эффекты — при lock, смерти или роли зомби."""
         return self.is_system_locked() or self.is_dead or self.is_zombie
+
+    def is_in_agony(self) -> bool:
+        return (
+            not self.is_dead
+            and not self.is_zombie
+            and self.health > 0
+            and self.health * 100 <= self.max_health * AGONY_PCT
+        )
+
+    def start_emission(self, timer_sec: int, duration_sec: int):
+        self.emission_timer = max(0, int(timer_sec))
+        self.emission_duration = max(0, int(duration_sec))
+        self.emission_strike_tick = 0
+        return self.add_notification("ВЫБРОС!", "info", priority=2)
 
     def grant_session_admit(self):
         """Чип ДОПУСК В ИГРУ / CmdSub.ADMIT — сессионный вход (главный мастер)."""
@@ -686,7 +762,9 @@ class Player:
                 self.emission_strike_tick += 1
                 
                 # Проверка укрытия (Зелёной Зоны)
-                is_safe = (t - self.last_safe_zone_time < 5.0)
+                is_safe = (t - self.last_safe_zone_time < 5.0) and getattr(
+                    self, "sz_emission_protect", False
+                )
                 
                 if not is_safe:
                     # Каждые 10 секунд — урон
@@ -702,6 +780,8 @@ class Player:
 
         # 3. Стадия 2: Лучевая болезнь (>50% от max_rad)
         if self.radiation > self.max_rad * 0.5:
+            self.grant_achievement("rad_50")
+            self.grant_achievement("rad_sick")
             self.rad_tick_counter += 1
             if self.rad_tick_counter >= 60:  # Раз в 60 секунд (мин)
                 self.rad_tick_counter = 0
@@ -971,9 +1051,12 @@ class Player:
 
     def _use_quest_chip(self, item: ItemChip) -> Dict:
         mods = item.modifiers
+        hidden = bool(mods.get("hidden"))
+        if hidden and self.level < LVL_HIDDEN_QUEST:
+            return {"type": "error", "text": "СКРЫТЫЙ ЛВ20"}
         if mods.get("complete"):
             qid = mods.get("quest_id", "")
-            return self.complete_quest(qid)
+            return self.complete_quest(qid, hidden=hidden)
         qid = str(mods.get("quest_id", f"q{int(time.time())}"))
         title = mods.get("title", "Задание")
         desc = mods.get("short_desc", "Поручение мастера")
@@ -981,13 +1064,15 @@ class Player:
             if t.id == qid and t.status == "active":
                 return {"type": "error", "text": "ЗАДАНИЕ УЖЕ АКТИВНО"}
         rub = max(0, int(mods.get("rub_reward", 0)))
-        self.active_tasks.append(ActiveTask(qid, title, desc, "active", rub_reward=rub))
+        self.active_tasks.append(
+            ActiveTask(qid, title, desc, "active", rub_reward=rub, hidden=hidden)
+        )
         if len(self.active_tasks) > 8:
             self.active_tasks.pop(0)
         self.save_state()
         return {"type": "info", "text": f"ЗАДАНИЕ: {title}"}
 
-    def complete_quest(self, quest_id: str) -> Dict:
+    def complete_quest(self, quest_id: str, hidden: bool = False) -> Dict:
         task = None
         for t in self.active_tasks:
             if t.id == quest_id and t.status == "active":
@@ -997,6 +1082,11 @@ class Player:
             return {"type": "error", "text": "НЕТ ЗАДАНИЯ"}
         task.status = "completed"
         self.quests_completed += 1
+        if hidden or getattr(task, "hidden", False):
+            self.hidden_quests_completed += 1
+            for threshold, code in sorted(HIDDEN_QUEST_ACH.items()):
+                if self.hidden_quests_completed >= threshold:
+                    self.grant_achievement(code)
         rub = max(0, int(getattr(task, "rub_reward", 0)))
         if rub:
             self.money += rub
@@ -1046,7 +1136,6 @@ class Player:
             return
         self.current_note_idx = (self.current_note_idx - 1) % len(self.notifications)
 
-    @property
     def is_in_safe_zone(self) -> bool:
         """Находится ли игрок в укрытии (Зелёной Зоне) прямо сейчас"""
         return (time.time() - self.last_safe_zone_time < 5.0)

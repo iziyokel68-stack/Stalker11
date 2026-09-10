@@ -22,7 +22,9 @@
  *
  * Формат CONFIG_WRITE:
  *   type=0,sub=0,uses=1,p0=50,...,name=Иван
- *   type: 0=Расходники, 1=Броня, 2=Артефакт, 3=Админка
+ *   type: 0=Расходники, 1=Броня, 2=Артефакт, 3=Админка,
+ *         4=Квест, 5=Магазин
+ *   Админка sub: 0 revive … 7 register, 8 сохранение (снимок @0x0100)
  *   sub:  подтип (для расходников и админки; 7 = РЕГИСТРАЦИЯ)
  *   uses: кол-во использований (255 = бесконечно)
  *   p0..p15: параметры (знаковые int16)
@@ -369,7 +371,8 @@ void processCommand(const String& cmd) {
         case TXN_OP_QUEST:
             txn_build_quest(block, (uint32_t)txnId, (uint16_t)item, amount,
                             questId.length() ? questId.c_str() : nullptr,
-                            (flags & TXN_FLAG_QUEST_COMPLETE) != 0);
+                            (flags & TXN_FLAG_QUEST_COMPLETE) != 0,
+                            (flags & TXN_FLAG_QUEST_HIDDEN) != 0);
             break;
         case TXN_OP_ADMIT:
             txn_build_admit(block, (uint32_t)txnId);

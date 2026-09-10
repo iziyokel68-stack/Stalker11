@@ -29,8 +29,9 @@
  * ║ • Вибро: whitelist событий (ключ VIB = питание);  ║
  * ║   смерть, RAD, level_up, достижение, ранг,      ║
  * ║   воскрешение, выброс/info; не деньги/покупки)   ║
- * ║ Текущий скетч: 5 страниц (вкл. UWB стр.3) —      ║
- * ║ полный перенход на 3+подменю — Фаза 5             ║
+ * ║ UI: 3 top-level страницы: 0 Главная, 1 Инвентарь, 2 Меню    ║
+ * ║   (сопротивления / квесты / достижения / сдаться /         ║
+ * ║    настройки / UWB)                                        ║
  * ╠══════════════════════════════════════════════════╣
  * ║ Советы по сборке (сессия 06.2026):                ║
  * ║ • DFPlayer + вибро — 5V BUS (TPS63020), не USB   ║
@@ -56,6 +57,7 @@
 #include "eeprom_protocol.h"
 #include "mux_channels.h"
 #include "chip_header.h"
+#include "achievements.h"
 
 // =====================================================
 // РАСПИНОВКА (ESP32-S3-N16R8) — MASTER_SPECIFICATION §3
@@ -135,15 +137,44 @@ struct Packet {
 #pragma pack(pop)
 
 // Emitter (protocol.py)
+#define EMITTER_SYSTEM 0
 #define EMITTER_PLAYER 1
 #define EMITTER_ANOMALY 2
 #define EMITTER_BASE 3
 
 // Msg (protocol.py)
 #define MSG_DAMAGE 1
+#define MSG_HEAL 2
 #define MSG_RADIATION 3
+#define MSG_COMMAND 5
 #define MSG_ACK 6
 #define MSG_SAFE_ZONE 7
+#define MSG_EMISSION 8
+#define MSG_RADIO 11
+
+#define CMD_KILL 0
+#define CMD_REVIVE 1
+#define CMD_WIPE 2
+#define CMD_ADD_MONEY 3
+#define CMD_SET_PROJECT 4
+#define CMD_ADD_XP 5
+#define CMD_GRANT_RESISTANCE 6
+#define CMD_ADMIT 7
+
+#define EMISSION_DMG_TICK 250
+#define EMISSION_RAD_TICK 250
+#define RAD_SICKNESS_HP 10
+#define AGONY_PCT 10
+#define ROLE_STALKER 0
+#define ROLE_CONTROLLER 1
+#define ROLE_MUTANT 2
+#define ANTIPHASE_TIMEOUT_MS 3500
+#define RSSI_SAFE_EXIT (-85)
+#define RESISTANCE_THRESHOLD 1000
+#define RESISTANCE_CAP 50
+#define IFRAME_MS 900
+#define CHIP_SAVE_ADDR 0x0100
+#define MENU_COUNT 6
 
 // Доп. флаги Safe Zone
 #define SZ_PROT_FLAG 0x7FFF
@@ -163,8 +194,58 @@ int playerXP = 0;
 int playerLevel = 1;
 int playerDeaths = 0;
 bool playerDead = false;
-bool playerZombie = false;   // Роль зомби (RAD 100%, выброс, пси) — экран «ВЫ ЗОМБИ»; выход только «Сдаться»
-bool admitPending = true;  // Блокировка всей системы ПДА (не в NVS); CmdSub.ADMIT / type=3 sub=6
+bool playerZombie = false;
+bool admitPending = true;
+int cheatShieldCount = 0;
+int8_t actorRole = ROLE_STALKER;
+int emissionTimer = -1;
+int emissionDuration = 0;
+int emissionStrikeTick = 0;
+bool szEmissionProtect = false;
+int dmgAcc[8] = {0};
+int totalHpDamage = 0;
+int radTickCounter = 0;
+int antiradUses = 0;
+int totalSpent = 0;
+int totalEarned = 0;
+int questsDone = 0;
+int hiddenQuestsDone = 0;
+int zzHealTotal = 0;
+int detectorTriggers = 0;
+int arenaFights = 0;
+int arenaWins = 0;
+int bankVolume = 0;
+uint32_t lastAnomalyPacketMs = 0;
+bool inAnomalyZone = false;
+int shieldBreaks = 0;
+uint8_t menuIndex = 0;
+int8_t menuSub = -1;
+uint8_t surrenderStep = 0;
+bool chipConfirmPending = false;
+ChipHeader pendingChip;
+char pendingChipName[25] = "";
+uint8_t pendingChipCh = 0;
+uint32_t lastGameTickMs = 0;
+uint8_t achScroll = 0;
+uint8_t questSel = 0;
+uint8_t notifyIdx = 0;
+char notifyLog[5][48];
+uint8_t notifyCount = 0;
+bool hadRadHigh = false;
+uint32_t lastIframeMs = 0;
+uint8_t lastIframeMac[6] = {0};
+volatile bool newEmissionReceived = false;
+volatile int16_t incomingEmissionTimer = 0;
+volatile int16_t incomingEmissionDur = 0;
+volatile bool newCommandReceived = false;
+volatile int16_t incomingCmd = 0;
+volatile int16_t incomingCmdVal2 = 0;
+volatile bool newRadioReceived = false;
+volatile int16_t incomingRadioTrack = 0;
+volatile int16_t incomingRadioVol = 0;
+volatile bool incomingFromPlayer = false;
+volatile bool incomingControllerPsi = false;
+uint8_t anomalyMac[6] = {0};
 // Регистрация: playerRegistered + playerName[] через ПК/EEPROM (programmer.py); до регистрации — пустой экран
 // Античит: cheatShieldCount (NVS) — инкремент при экранировании ESP-NOW; без штрафа HP
 
@@ -202,6 +283,17 @@ void checkRankReadyNotify();
 void saveState();
 void completeRegistration(const char *name);
 bool applyDfVolume();
+bool isInSafeZone();
+void markDead();
+void markZombie();
+void doSurrender();
+void startEmission(int timerSec, int durSec);
+void gameTick();
+void pulseVibro(uint16_t ms);
+void refreshLoadoutAchievements();
+void grantQuestMilestones();
+void grantSpendMilestones();
+void grantEarnMilestones();
 extern Preferences prefs;
 extern bool needFullRedraw;
 extern bool isAudioReady;
@@ -225,31 +317,8 @@ const RankTier RANK_TIERS[] = {
 };
 #define NUM_RANKS 6
 
-enum AchievementId : uint8_t {
-  ACH_REG = 0,
-  ACH_FIRST_ANOMALY,
-  ACH_FIRST_ARTIFACT,
-  ACH_FIRST_QUEST,
-  ACH_SURVIVE_2H,
-  ACH_COUNT
-};
-
-struct AchDef {
-  const char *name;
-  int xp;
-  int rub;
-};
-
-const AchDef ACH_TABLE[ACH_COUNT] = {
-    {"РЕГИСТРАЦИЯ", 80, 150},
-    {"ПЕРВАЯ АНОМАЛИЯ", 150, 200},
-    {"ПЕРВЫЙ АРТЕФАКТ", 120, 180},
-    {"ПЕРВЫЙ КВЕСТ", 200, 300},
-    {"2Ч БЕЗ СМЕРТИ", 25, 50},
-};
-
 int playerRank = 0;
-uint32_t achievementFlags = 0;
+uint32_t achFlags[3] = {0, 0, 0};
 bool playerRegistered = false;
 int playerEventId = 0;                 // ID игрока на событии (LoRa to=)
 char playerAssignedUid[16] = "";       // UID, выданный мастером, не MAC
@@ -324,16 +393,22 @@ const char *getLevelTitle() {
   return getRankTitle();
 }
 
-bool hasAchievement(AchievementId id) {
-  return (achievementFlags & (1UL << id)) != 0;
+bool hasAchievement(uint8_t id) {
+  if (id >= ACH_COUNT)
+    return false;
+  return (achFlags[id / 32] & (1UL << (id % 32))) != 0;
 }
 
-void grantAchievement(AchievementId id) {
+void pulseVibro(uint16_t ms) {
+  achVibroUntilMs = millis() + ms;
+}
+
+void grantAchievement(uint8_t id) {
   if (id >= ACH_COUNT || hasAchievement(id))
     return;
   if (!(cfgFuncFlags & (1 << 6)))
     return;
-  achievementFlags |= (1UL << id);
+  achFlags[id / 32] |= (1UL << (id % 32));
   const AchDef &a = ACH_TABLE[id];
   playerXP += a.xp;
   playerMoney += a.rub;
@@ -341,7 +416,7 @@ void grantAchievement(AchievementId id) {
   snprintf(buf, sizeof(buf), "ДОСТИЖЕНИЕ: %s +%dXP +%dRUB", a.name, a.xp,
            a.rub);
   setEvent(buf, C_PURPLE);
-  achVibroUntilMs = millis() + 350;
+  pulseVibro(350);
   saveState();
   checkLevelUps();
   checkRankReadyNotify();
@@ -373,6 +448,13 @@ void checkLevelUps() {
     char buf[40];
     snprintf(buf, sizeof(buf), "LV%u +%d RUB", playerLevel, reward);
     setEvent(buf, C_GREEN);
+    pulseVibro(400);
+    if (playerLevel == 2) grantAchievement(ACH_LEVEL_2);
+    if (playerLevel == 10) grantAchievement(ACH_LEVEL_10);
+    if (playerLevel == 25) grantAchievement(ACH_LEVEL_25);
+    if (playerLevel == 50) grantAchievement(ACH_LEVEL_50);
+    if (playerLevel == 75) grantAchievement(ACH_LEVEL_75);
+    if (playerLevel == 100) grantAchievement(ACH_LEVEL_100);
   }
   saveState();
   checkRankReadyNotify();
@@ -426,8 +508,8 @@ void noteAnomalyDiscovery(const uint8_t *mac) {
     return;
   if (discoveredMacCount < 8)
     memcpy(discoveredMacs[discoveredMacCount++], mac, 6);
-  if (!hasAchievement(ACH_FIRST_ANOMALY))
-    grantAchievement(ACH_FIRST_ANOMALY);
+  if (!hasAchievement(ACH_ANOMALY_1))
+    grantAchievement(ACH_ANOMALY_1);
   else {
     playerXP += 40;
     checkLevelUps();
@@ -449,6 +531,8 @@ void noteAnomalySignal(const esp_now_recv_info_t *info) {
   if (info && info->rx_ctrl)
     lastAnomalyRssi = info->rx_ctrl->rssi;
   lastAnomalySignalMs = millis();
+  lastAnomalyPacketMs = millis();
+  inAnomalyZone = true;
 }
 
 bool isAnomalyDetectorActive() {
@@ -644,6 +728,8 @@ void txnHandlePurchase(int32_t baseAmount, uint16_t itemId, TxnOutcome &o) {
     return;
   }
   playerMoney -= o.paid;
+  totalSpent += o.paid;
+  grantSpendMilestones();
   o.balanceAfter = playerMoney;
   o.result = TXN_RESULT_OK;
   if (getRankDiscountPct() > 0)
@@ -684,6 +770,12 @@ void txnHandleBank(int32_t amount, uint8_t flags, TxnOutcome &o) {
     o.paid = amount;
     o.balanceAfter = playerMoney;
     o.result = TXN_RESULT_OK;
+    bankVolume += amount;
+    grantAchievement(ACH_TRANSFER_FIRST);
+    if (bankVolume >= 10000)
+      grantAchievement(ACH_BANK_10K);
+    if (amount >= 5000)
+      grantAchievement(ACH_TRANSFER_5K);
     saveState();
     snprintf(o.eventMsg, sizeof(o.eventMsg), "ВКЛАД: -%d RUB", (int)amount);
     o.eventColor = C_CYAN;
@@ -692,6 +784,10 @@ void txnHandleBank(int32_t amount, uint8_t flags, TxnOutcome &o) {
     o.paid = amount;
     o.balanceAfter = playerMoney;
     o.result = TXN_RESULT_OK;
+    bankVolume += amount;
+    grantAchievement(ACH_TRANSFER_FIRST);
+    if (bankVolume >= 10000)
+      grantAchievement(ACH_BANK_10K);
     saveState();
     snprintf(o.eventMsg, sizeof(o.eventMsg), "СНЯТИЕ: +%d RUB", (int)amount);
     o.eventColor = C_CYAN;
@@ -748,8 +844,10 @@ void txnHandleQuest(int32_t rubReward, uint16_t questCatId, uint8_t flags,
       activeTasks[i] = activeTasks[i + 1];
     if (activeTaskCount > 0)
       activeTaskCount--;
-    if (!hasAchievement(ACH_FIRST_QUEST))
-      grantAchievement(ACH_FIRST_QUEST);
+    questsDone++;
+    if (flags & TXN_FLAG_QUEST_HIDDEN)
+      hiddenQuestsDone++;
+    grantQuestMilestones();
     o.paid = reward;
     o.balanceAfter = playerMoney;
     o.result = TXN_RESULT_OK;
@@ -799,6 +897,7 @@ void txnHandleAdmit(TxnOutcome &o) {
   }
   admitPending = false;
   completeRegistration(nullptr);
+  grantAchievement(ACH_START_FIRST);
   o.result = TXN_RESULT_OK;
   snprintf(o.eventMsg, sizeof(o.eventMsg), "ДОПУСК В ИГРУ");
   o.eventColor = C_GREEN;
@@ -947,6 +1046,10 @@ const char *chipTypeLabel(uint8_t type, uint8_t sub) {
     return "АРТ";
   if (type == CHIP_TYPE_ADMIN)
     return "АДМИН";
+  if (type == CHIP_TYPE_QUEST)
+    return "КВЕСТ";
+  if (type == CHIP_TYPE_SHOP)
+    return "МАГАЗИН";
   if (type == CHIP_TYPE_CONSUMABLE) {
     switch (sub) {
     case CHIP_SUB_HEAL:
@@ -1055,6 +1158,11 @@ void applyAntiradAmount(int amount, bool pct) {
   playerRad -= sub;
   if (playerRad < 0)
     playerRad = 0;
+  antiradUses++;
+  if (antiradUses >= 10)
+    grantAchievement(ACH_ANTIRAD_10);
+  if (hadRadHigh && playerRad == 0)
+    grantAchievement(ACH_RAD_CLEAN);
 }
 
 bool applyAdminChip(const ChipHeader &hdr, const char *name) {
@@ -1071,6 +1179,8 @@ bool applyAdminChip(const ChipHeader &hdr, const char *name) {
     playerDead = false;
     playerHP = playerMaxHP;
     playerRad = 0;
+    grantAchievement(ACH_REVIVE_FIRST);
+    pulseVibro(400);
     setEvent("СВЯЗЬ ВОССТАНОВЛЕНА", C_GREEN);
     return true;
   case CHIP_ADM_MONEY:
@@ -1121,6 +1231,7 @@ bool applyAdminChip(const ChipHeader &hdr, const char *name) {
     }
     admitPending = false;
     completeRegistration(nullptr);
+    grantAchievement(ACH_START_FIRST);
     setEvent("ДОПУСК В ИГРУ", C_GREEN);
     return true;
   case CHIP_ADM_REGISTER: {
@@ -1130,6 +1241,34 @@ bool applyAdminChip(const ChipHeader &hdr, const char *name) {
     playerEventId = (int)hdr.params[0];
     completeRegistration(nm[0] ? nm : nullptr);
     setEvent("РЕГИСТРАЦИЯ", C_GREEN);
+    return true;
+  }
+  case CHIP_ADM_SAVE: {
+    uint8_t snap[48];
+    memset(snap, 0, sizeof(snap));
+    snap[0] = (uint8_t)(playerHP & 0xFF);
+    snap[1] = (uint8_t)((playerHP >> 8) & 0xFF);
+    snap[2] = (uint8_t)(playerMaxHP & 0xFF);
+    snap[3] = (uint8_t)((playerMaxHP >> 8) & 0xFF);
+    snap[4] = (uint8_t)(playerRad & 0xFF);
+    snap[5] = (uint8_t)((playerRad >> 8) & 0xFF);
+    snap[6] = (uint8_t)(playerLevel & 0xFF);
+    snap[7] = (uint8_t)(playerRank & 0xFF);
+    snap[8] = (uint8_t)(playerMoney & 0xFF);
+    snap[9] = (uint8_t)((playerMoney >> 8) & 0xFF);
+    snap[10] = (uint8_t)((playerMoney >> 16) & 0xFF);
+    snap[11] = (uint8_t)((playerMoney >> 24) & 0xFF);
+    snap[12] = (uint8_t)(playerXP & 0xFF);
+    snap[13] = (uint8_t)((playerXP >> 8) & 0xFF);
+    snap[14] = (uint8_t)((playerXP >> 16) & 0xFF);
+    snap[15] = (uint8_t)((playerXP >> 24) & 0xFF);
+    memcpy(snap + 16, achFlags, sizeof(achFlags));
+    snap[28] = (uint8_t)cheatShieldCount;
+    snap[29] = (uint8_t)(cheatShieldCount >> 8);
+    snap[30] = (uint8_t)playerDeaths;
+    snap[31] = playerZombie ? 1 : 0;
+    eepromWriteBlockCh(UNIVERSAL_SLOT, CHIP_SAVE_ADDR, snap, sizeof(snap));
+    setEvent("СНИМОК СОХРАНЁН", C_CYAN);
     return true;
   }
   default:
@@ -1253,8 +1392,8 @@ bool tryApplyEquipment(uint8_t ch, ChipSlotRt &st, const ChipHeader &hdr) {
     setEvent("НУЖЕН ДОПУСК", C_RED);
     return false;
   }
-  if (playerDead) {
-    setEvent("НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+  if (playerDead || playerZombie) {
+    setEvent(playerZombie ? "ЗОМБИ: СДАТЬСЯ" : "НУЖНО ВОСКРЕШЕНИЕ", C_RED);
     return false;
   }
   if (hdr.type == CHIP_TYPE_ARMOR) {
@@ -1301,10 +1440,165 @@ bool tryApplyEquipment(uint8_t ch, ChipSlotRt &st, const ChipHeader &hdr) {
   st.applied = true;
   st.lastRegenMs = millis();
   if (hdr.type == CHIP_TYPE_ARTIFACT)
-    grantAchievement(ACH_FIRST_ARTIFACT);
+    grantAchievement(ACH_ART_FIRST);
+  refreshLoadoutAchievements();
+  pulseVibro(250);
   char buf[32];
   snprintf(buf, sizeof(buf), "%s CH%u", st.label, (unsigned)ch);
   setEvent(buf, C_GREEN);
+  return true;
+}
+
+void grantQuestMilestones() {
+  if (questsDone >= 1)
+    grantAchievement(ACH_QUEST_1);
+  if (questsDone >= 5)
+    grantAchievement(ACH_QUEST_5);
+  if (questsDone >= 15)
+    grantAchievement(ACH_QUEST_15);
+  if (questsDone >= 30)
+    grantAchievement(ACH_QUEST_30);
+  if (questsDone >= 50)
+    grantAchievement(ACH_QUEST_50);
+  if (hiddenQuestsDone >= 1)
+    grantAchievement(ACH_HIDDEN_1);
+  if (hiddenQuestsDone >= 10)
+    grantAchievement(ACH_HIDDEN_10);
+  if (playerRank >= 5 && questsDone >= 50)
+    grantAchievement(ACH_MONOLITH);
+}
+
+void grantSpendMilestones() {
+  if (totalSpent >= 1)
+    grantAchievement(ACH_BUY_FIRST);
+  if (totalSpent >= 1000)
+    grantAchievement(ACH_SPEND_1K);
+  if (totalSpent >= 5000)
+    grantAchievement(ACH_SPEND_5K);
+  if (totalSpent >= 20000)
+    grantAchievement(ACH_SPEND_20K);
+  if (totalSpent >= 50000)
+    grantAchievement(ACH_SPEND_50K);
+  if (totalSpent >= 100000)
+    grantAchievement(ACH_SPEND_100K);
+}
+
+void grantEarnMilestones() {
+  if (totalEarned >= 1)
+    grantAchievement(ACH_SELL_FIRST);
+  if (totalEarned >= 2000)
+    grantAchievement(ACH_EARN_2K);
+  if (totalEarned >= 10000)
+    grantAchievement(ACH_EARN_10K);
+  if (totalEarned >= 50000)
+    grantAchievement(ACH_EARN_50K);
+  if (totalEarned >= 200000)
+    grantAchievement(ACH_EARN_200K);
+}
+
+void refreshLoadoutAchievements() {
+  int armor = countEquippedType(CHIP_TYPE_ARMOR);
+  int arts = countEquippedType(CHIP_TYPE_ARTIFACT);
+  int filled = 0;
+  for (uint8_t i = 0; i < EQ_SLOT_COUNT; i++) {
+    if (eqRt[i].applied)
+      filled++;
+  }
+  if (armor)
+    grantAchievement(ACH_ARMOR_FIRST);
+  if (armor && arts >= 3)
+    grantAchievement(ACH_FULL_LOADOUT);
+  if (filled >= EQ_SLOT_COUNT)
+    grantAchievement(ACH_SLOTS_ALL);
+  if (arts >= 3)
+    grantAchievement(ACH_ART_TYPES_3);
+}
+
+bool applyQuestChip(const ChipHeader &hdr, const char *name) {
+  bool complete = hdr.params[0] != 0;
+  bool hidden = hdr.params[1] != 0;
+  int reward = hdr.params[2];
+  if (hidden && !canUseHiddenQuest()) {
+    setEvent("СКРЫТЫЙ ЛВ20", C_RED);
+    return false;
+  }
+  char qid[12];
+  snprintf(qid, sizeof(qid), "q%u", (unsigned)hdr.sub);
+  if (!complete) {
+    if (findActiveQuest(qid) >= 0) {
+      setEvent("КВЕСТ: УЖЕ АКТИВЕН", C_ORANGE);
+      return false;
+    }
+    if (activeTaskCount >= ACTIVE_TASKS_MAX) {
+      setEvent("КВЕСТ: ЛИМИТ", C_RED);
+      return false;
+    }
+    ActiveTaskStub &t = activeTasks[activeTaskCount++];
+    strncpy(t.id, qid, sizeof(t.id) - 1);
+    t.id[sizeof(t.id) - 1] = '\0';
+    if (name && name[0])
+      strncpy(t.title, name, sizeof(t.title) - 1);
+    else
+      snprintf(t.title, sizeof(t.title), "Задание #%u", (unsigned)hdr.sub);
+    t.title[sizeof(t.title) - 1] = '\0';
+    strncpy(t.shortDesc, hidden ? "Скрытый квест" : "Квест-чип CH0",
+            sizeof(t.shortDesc) - 1);
+    pulseVibro(250);
+    setEvent("КВЕСТ ПРИНЯТ", C_YELLOW);
+    return true;
+  }
+  int idx = findActiveQuest(qid);
+  if (idx >= 0) {
+    for (uint8_t i = (uint8_t)idx; i + 1 < activeTaskCount; i++)
+      activeTasks[i] = activeTasks[i + 1];
+    if (activeTaskCount > 0)
+      activeTaskCount--;
+  }
+  questsDone++;
+  if (hidden)
+    hiddenQuestsDone++;
+  if (reward > 0) {
+    playerMoney += reward;
+    playerXP += reward;
+    checkLevelUps();
+  }
+  grantQuestMilestones();
+  pulseVibro(250);
+  setEvent("КВЕСТ СДАН", C_GREEN);
+  return true;
+}
+
+bool applyShopChip(const ChipHeader &hdr) {
+  if (!canUseStore()) {
+    setEvent("МАГАЗИН: МАЛО УРОВНЯ", C_ORANGE);
+    return false;
+  }
+  int price = hdr.params[0];
+  if (price > 0) {
+    int paid = calcShopPrice(price);
+    if (playerMoney < paid) {
+      setEvent("НЕ ХВАТАЕТ", C_RED);
+      return false;
+    }
+    playerMoney -= paid;
+    totalSpent += paid;
+    grantSpendMilestones();
+    char buf[32];
+    snprintf(buf, sizeof(buf), "МАГАЗИН: -%d RUB", paid);
+    setEvent(buf, C_CYAN);
+    return true;
+  }
+  if (price < 0) {
+    int got = -price;
+    playerMoney += got;
+    totalEarned += got;
+    grantEarnMilestones();
+    char buf[32];
+    snprintf(buf, sizeof(buf), "ПРОДАЖА: +%d RUB", got);
+    setEvent(buf, C_CYAN);
+    return true;
+  }
+  setEvent("МАГАЗИН", C_CYAN);
   return true;
 }
 
@@ -1319,10 +1613,14 @@ bool tryApplyCh0(const ChipHeader &hdr, const char *name) {
     setEvent("НУЖЕН ДОПУСК", C_RED);
     return false;
   }
-  if (playerDead) {
-    setEvent("НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+  if (playerDead || playerZombie) {
+    setEvent(playerZombie ? "ЗОМБИ: СДАТЬСЯ" : "НУЖНО ВОСКРЕШЕНИЕ", C_RED);
     return false;
   }
+  if (hdr.type == CHIP_TYPE_QUEST)
+    return applyQuestChip(hdr, name);
+  if (hdr.type == CHIP_TYPE_SHOP)
+    return applyShopChip(hdr);
   if (hdr.type == CHIP_TYPE_CONSUMABLE)
     return applyConsumableChip(hdr);
   setEvent("НЕИЗВЕСТНЫЙ ЧИП", C_ORANGE);
@@ -1330,7 +1628,7 @@ bool tryApplyCh0(const ChipHeader &hdr, const char *name) {
 }
 
 void tickSlotRegen(ChipSlotRt &st) {
-  if (!st.applied || playerDead || admitPending)
+  if (!st.applied || playerDead || playerZombie || admitPending)
     return;
   int amount = 0;
   int intervalSec = 0;
@@ -1343,6 +1641,8 @@ void tickSlotRegen(ChipSlotRt &st) {
   }
   if (intervalSec <= 0 || amount == 0)
     return;
+  if (playerHP > 0 && playerHP * 100 <= playerMaxHP * AGONY_PCT)
+    intervalSec *= 2;
   uint32_t iv = (uint32_t)intervalSec * 1000UL;
   if (millis() - st.lastRegenMs < iv)
     return;
@@ -1352,6 +1652,8 @@ void tickSlotRegen(ChipSlotRt &st) {
 }
 
 void tickConsumableRegen() {
+  if (playerDead || playerZombie || admitPending)
+    return;
   uint32_t now = millis();
   if (consRegenHp && now < consRegenHpUntilMs && now - consRegenHpLastMs >= 1000) {
     consRegenHpLastMs = now;
@@ -1369,6 +1671,10 @@ void tickConsumableRegen() {
 void pollOneChipSlot(uint8_t ch, ChipSlotRt &st, bool isCh0) {
   bool present = chipPresentOnCh(ch);
   if (!present) {
+    if (isCh0 && chipConfirmPending && pendingChipCh == ch) {
+      chipConfirmPending = false;
+      pendingChipName[0] = '\0';
+    }
     if (st.applied)
       unapplyEquipment(st);
     memset(&st, 0, sizeof(st));
@@ -1391,6 +1697,8 @@ void pollOneChipSlot(uint8_t ch, ChipSlotRt &st, bool isCh0) {
   }
   if (st.rejected)
     return;
+  if (isCh0 && chipConfirmPending)
+    return;
   if (isCh0 && ch0TxnBusy())
     return;
 
@@ -1403,6 +1711,22 @@ void pollOneChipSlot(uint8_t ch, ChipSlotRt &st, bool isCh0) {
   if (hdr.uses == 0) {
     strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
     st.rejected = true;
+    return;
+  }
+
+  if (isCh0 && hdr.type == CHIP_TYPE_CONSUMABLE) {
+    chipConfirmPending = true;
+    pendingChip = hdr;
+    pendingChipCh = ch;
+    strncpy(pendingChipName, name[0] ? name : chipTypeLabel(hdr.type, hdr.sub),
+            sizeof(pendingChipName) - 1);
+    pendingChipName[sizeof(pendingChipName) - 1] = '\0';
+    strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+    st.type = hdr.type;
+    st.sub = hdr.sub;
+    pulseVibro(200);
+    setEvent("ИСПОЛЬЗОВАТЬ? ОК/ESC", C_YELLOW);
+    needFullRedraw = true;
     return;
   }
 
@@ -1438,6 +1762,253 @@ void pollChips() {
   tickConsumableRegen();
 }
 
+bool isCombatLocked() {
+  return admitPending || playerDead || playerZombie;
+}
+
+bool inAgony() {
+  return !playerDead && !playerZombie && playerHP > 0 &&
+         playerHP * 100 <= playerMaxHP * AGONY_PCT;
+}
+
+void markDead() {
+  playerHP = 0;
+  playerDead = true;
+  playerZombie = false;
+  playerDeaths++;
+  grantAchievement(ACH_DEATH_FIRST);
+  if (playerDeaths >= 5)
+    grantAchievement(ACH_DEATHS_5);
+  pulseVibro(500);
+  setEvent("СВЯЗЬ ПОТЕРЯНА", C_RED);
+  saveState();
+}
+
+void markZombie() {
+  playerHP = 0;
+  playerDead = false;
+  playerZombie = true;
+  playerRad = playerMaxRad;
+  pulseVibro(500);
+  setEvent("ВЫ ЗОМБИ", C_PURPLE);
+  saveState();
+}
+
+void doSurrender() {
+  if (admitPending)
+    return;
+  if (playerZombie)
+    playerZombie = false;
+  if (!playerDead)
+    markDead();
+}
+
+void startEmission(int timerSec, int durSec) {
+  if (timerSec < 0)
+    timerSec = 0;
+  if (durSec < 0)
+    durSec = 0;
+  emissionTimer = timerSec;
+  emissionDuration = durSec;
+  emissionStrikeTick = 0;
+  pulseVibro(400);
+  setEvent("ВЫБРОС!", C_RED);
+  if (isAudioReady)
+    myDFPlayer.playMp3Folder(2);
+}
+
+void accumulateInnate(int dmgType, int actual) {
+  if (dmgType < 0 || dmgType > 6 || actual <= 0)
+    return;
+  dmgAcc[dmgType] += actual;
+  while (dmgAcc[dmgType] >= RESISTANCE_THRESHOLD) {
+    dmgAcc[dmgType] -= RESISTANCE_THRESHOLD;
+    if (innateRes[dmgType] < RESISTANCE_CAP) {
+      innateRes[dmgType]++;
+      grantAchievement(ACH_RES_PLUS_1);
+      if (innateRes[dmgType] >= 10)
+        grantAchievement(ACH_RES_10);
+      if (innateRes[dmgType] >= RESISTANCE_CAP)
+        grantAchievement(ACH_RES_50_CAP);
+    }
+  }
+}
+
+void applyRadGain(int actualRad) {
+  if (actualRad <= 0)
+    return;
+  playerRad += actualRad;
+  if (playerRad > playerMaxRad)
+    playerRad = playerMaxRad;
+  if (playerRad * 2 >= playerMaxRad) {
+    hadRadHigh = true;
+    grantAchievement(ACH_RAD_50);
+  }
+  pulseVibro(200);
+  if (playerRad >= playerMaxRad) {
+    markZombie();
+    return;
+  }
+  saveState();
+}
+
+int applyHpDamage(int dmg, uint16_t mask, const char *source, bool iframe) {
+  if (isCombatLocked() || dmg <= 0)
+    return 0;
+  if (iframe && lastIframeMs && (millis() - lastIframeMs < IFRAME_MS) &&
+      memcmp(lastIframeMac, anomalyMac, 6) == 0)
+    return 0;
+  int res = 0;
+  int usedType = -1;
+  for (int b = 0; b < 7; b++) {
+    if (mask & (1 << b)) {
+      int r = protForType(b);
+      if (isInSafeZone())
+        r += zoneProt[b];
+      r = min(100, r);
+      if (r > res)
+        res = r;
+      usedType = b;
+    }
+  }
+  int actual = dmg * (100 - res) / 100;
+  if (actual < 0)
+    actual = 0;
+  if (immuneUntilMs && millis() < immuneUntilMs)
+    actual = 0;
+  if (usedType >= 0)
+    accumulateInnate(usedType, actual);
+  if (actual > 0) {
+    totalHpDamage += actual;
+    if (totalHpDamage >= 100)
+      grantAchievement(ACH_DMG_100);
+    if (totalHpDamage >= 500)
+      grantAchievement(ACH_DMG_500);
+    if (totalHpDamage >= 2000)
+      grantAchievement(ACH_DMG_2000);
+  }
+  playerHP -= actual;
+  lastDamageMs = millis();
+  lastIframeMs = millis();
+  memcpy(lastIframeMac, anomalyMac, 6);
+  pulseVibro(250);
+  if (playerHP <= 0) {
+    playerHP = 0;
+    if (source && (!strcmp(source, "EMISSION") || !strcmp(source, "PSI")))
+      markZombie();
+    else
+      markDead();
+  } else {
+    saveState();
+  }
+  return actual;
+}
+
+void confirmPendingChip() {
+  if (!chipConfirmPending)
+    return;
+  bool ok = applyConsumableChip(pendingChip);
+  if (ok) {
+    consumeChipUse(pendingChipCh, pendingChip);
+    ch0Rt.applied = true;
+    strncpy(ch0Rt.label, chipTypeLabel(pendingChip.type, pendingChip.sub),
+            sizeof(ch0Rt.label) - 1);
+    saveState();
+  } else {
+    ch0Rt.rejected = true;
+  }
+  chipConfirmPending = false;
+  needFullRedraw = true;
+}
+
+void rejectPendingChip() {
+  if (!chipConfirmPending)
+    return;
+  chipConfirmPending = false;
+  ch0Rt.rejected = true;
+  strncpy(ch0Rt.label, chipTypeLabel(pendingChip.type, pendingChip.sub),
+          sizeof(ch0Rt.label) - 1);
+  setEvent("ОТМЕНА", C_LGRAY);
+  needFullRedraw = true;
+}
+
+void gameTick() {
+  if (admitPending)
+    return;
+
+  if (inAnomalyZone && lastAnomalyPacketMs &&
+      (millis() - lastAnomalyPacketMs > ANTIPHASE_TIMEOUT_MS)) {
+    inAnomalyZone = false;
+    if (lastAnomalyRssi > RSSI_SAFE_EXIT) {
+      cheatShieldCount++;
+      if (cheatShieldCount >= 10)
+        grantAchievement(ACH_ANTICHEAT_10);
+      saveState();
+      setEvent("СИГНАЛ ПРЕРВАН", C_ORANGE);
+    } else if (!playerDead && !playerZombie && playerHP > playerMaxHP / 10) {
+      grantAchievement(ACH_EXIT_ALIVE);
+    }
+  }
+
+  static bool detLatched = false;
+  bool detNow = isAnomalyDetectorActive();
+  if (detNow && !detLatched) {
+    detectorTriggers++;
+    grantAchievement(ACH_DETECTOR_FIRST);
+    if (detectorTriggers >= 50)
+      grantAchievement(ACH_DETECTOR_50);
+  }
+  detLatched = detNow;
+
+  if (emissionTimer > 0) {
+    emissionTimer--;
+    if (emissionTimer == 3600)
+      setEvent("ВЫБРОС ЧЕРЕЗ 1Ч", C_RED);
+    else if (emissionTimer == 1800)
+      setEvent("ВЫБРОС ЧЕРЕЗ 30М", C_RED);
+    else if (emissionTimer == 900)
+      setEvent("ВЫБРОС ЧЕРЕЗ 15М", C_RED);
+    else if (emissionTimer == 300)
+      setEvent("ВЫБРОС ЧЕРЕЗ 5М", C_RED);
+    if (emissionTimer == 3600 || emissionTimer == 1800 ||
+        emissionTimer == 900 || emissionTimer == 300)
+      pulseVibro(400);
+  } else if (emissionTimer == 0) {
+    if (emissionDuration > 0) {
+      emissionDuration--;
+      emissionStrikeTick++;
+      bool sheltered = isInSafeZone() && szEmissionProtect;
+      if (!sheltered && !isCombatLocked() && (emissionStrikeTick % 10 == 0)) {
+        applyHpDamage(EMISSION_DMG_TICK, (1 << 5), "EMISSION", false);
+        if (!playerZombie)
+          applyRadGain(EMISSION_RAD_TICK);
+      }
+    } else {
+      emissionTimer = -1;
+      emissionStrikeTick = 0;
+      setEvent("ВЫБРОС ОКОНЧЕН", C_GREEN);
+      pulseVibro(300);
+    }
+  }
+
+  if (isCombatLocked())
+    return;
+
+  if (playerRad * 2 > playerMaxRad) {
+    radTickCounter++;
+    grantAchievement(ACH_RAD_SICK);
+    if (radTickCounter >= 60) {
+      radTickCounter = 0;
+      applyHpDamage(RAD_SICKNESS_HP, 0, "RAD", false);
+    }
+  } else {
+    radTickCounter = 0;
+  }
+
+  if (discoveredMacCount >= 20 && playerLevel >= 20)
+    grantAchievement(ACH_STALKER_KRAFT);
+}
+
 // =====================================================
 // NVS — ЗАГРУЗКА / СОХРАНЕНИЕ
 // =====================================================
@@ -1454,8 +2025,24 @@ void loadState() {
   playerLevel = prefs.getInt("lvl", cfgStartLevel);
   playerDeaths = prefs.getInt("deaths", 0);
   playerDead = prefs.getBool("dead", false);
+  playerZombie = prefs.getBool("zombie", false);
   playerRank = prefs.getInt("rank", 0);
-  achievementFlags = prefs.getUInt("ach", 0);
+  achFlags[0] = prefs.getUInt("ach", 0);
+  achFlags[1] = prefs.getUInt("ach1", 0);
+  achFlags[2] = prefs.getUInt("ach2", 0);
+  cheatShieldCount = prefs.getInt("shield", 0);
+  questsDone = prefs.getInt("qdone", 0);
+  hiddenQuestsDone = prefs.getInt("qhid", 0);
+  totalHpDamage = prefs.getInt("tdmg", 0);
+  totalSpent = prefs.getInt("spent", 0);
+  totalEarned = prefs.getInt("earned", 0);
+  antiradUses = prefs.getInt("arad", 0);
+  actorRole = (int8_t)prefs.getChar("role", ROLE_STALKER);
+  zzHealTotal = prefs.getInt("zzhp", 0);
+  detectorTriggers = prefs.getInt("detn", 0);
+  arenaFights = prefs.getInt("afight", 0);
+  arenaWins = prefs.getInt("awin", 0);
+  bankVolume = prefs.getInt("bankv", 0);
   playerRegistered = prefs.getBool("reg", false);
   playerEventId = prefs.getInt("eid", 0);
   prefs.getString("auid", playerAssignedUid, sizeof(playerAssignedUid));
@@ -1489,8 +2076,24 @@ void saveState() {
   prefs.putInt("lvl", playerLevel);
   prefs.putInt("deaths", playerDeaths);
   prefs.putBool("dead", playerDead);
+  prefs.putBool("zombie", playerZombie);
   prefs.putInt("rank", playerRank);
-  prefs.putUInt("ach", achievementFlags);
+  prefs.putUInt("ach", achFlags[0]);
+  prefs.putUInt("ach1", achFlags[1]);
+  prefs.putUInt("ach2", achFlags[2]);
+  prefs.putInt("shield", cheatShieldCount);
+  prefs.putInt("qdone", questsDone);
+  prefs.putInt("qhid", hiddenQuestsDone);
+  prefs.putInt("tdmg", totalHpDamage);
+  prefs.putInt("spent", totalSpent);
+  prefs.putInt("earned", totalEarned);
+  prefs.putInt("arad", antiradUses);
+  prefs.putChar("role", (char)actorRole);
+  prefs.putInt("zzhp", zzHealTotal);
+  prefs.putInt("detn", detectorTriggers);
+  prefs.putInt("afight", arenaFights);
+  prefs.putInt("awin", arenaWins);
+  prefs.putInt("bankv", bankVolume);
   prefs.putBool("reg", playerRegistered);
   prefs.putInt("eid", playerEventId);
   prefs.putString("auid", playerAssignedUid);
@@ -1614,6 +2217,7 @@ void handleSerialConfig(const String &line) {
   if (line.startsWith("CONFIG:ADMIT")) {
     admitPending = false;
     completeRegistration(nullptr);
+    grantAchievement(ACH_START_FIRST);
     needFullRedraw = true;
     setEvent("ДОПУСК В ИГРУ", C_GREEN);
     Serial.println("OK");
@@ -1632,6 +2236,8 @@ void handleSerialConfig(const String &line) {
     playerDead = false;
     playerHP = playerMaxHP;
     playerRad = 0;
+    grantAchievement(ACH_REVIVE_FIRST);
+    pulseVibro(400);
     saveState();
     needFullRedraw = true;
     setEvent("СВЯЗЬ ВОССТАНОВЛЕНА", C_GREEN);
@@ -1663,10 +2269,25 @@ void handleSerialConfig(const String &line) {
     if (timer < 0)
       timer = 0;
     if (dur < 0)
-      dur = 0;
-    char buf[48];
-    snprintf(buf, sizeof(buf), "ВЫБРОС %dм / %dм", timer / 60, dur / 60);
-    setEvent(buf, C_RED);
+      dur = 60;
+    startEmission(timer, dur);
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:ROLE:")) {
+    String data = line.substring(strlen("CONFIG:ROLE:"));
+    int role = parseIntValue(data, "role");
+    if (role >= 0 && role <= ROLE_MUTANT)
+      actorRole = (int8_t)role;
+    saveState();
+    Serial.println("OK");
+    return;
+  }
+
+  if (line.startsWith("CONFIG:KILL")) {
+    if (!admitPending)
+      markDead();
     Serial.println("OK");
     return;
   }
@@ -1803,6 +2424,16 @@ void handleSerialConfig(const String &line) {
     Serial.print(playerMoney);
     Serial.print(",deaths=");
     Serial.println(playerDeaths);
+    Serial.print("ZOMBIE:");
+    Serial.println(playerZombie ? 1 : 0);
+    Serial.print("SHIELD:");
+    Serial.println(cheatShieldCount);
+    Serial.print("ROLE:");
+    Serial.println((int)actorRole);
+    Serial.print("EMISSION:");
+    Serial.print(emissionTimer);
+    Serial.print(",");
+    Serial.println(emissionDuration);
     Serial.print("NAME:");
     Serial.println(playerName);
     {
@@ -1822,7 +2453,6 @@ void handleSerialConfig(const String &line) {
 volatile bool newDamageReceived = false;
 volatile int16_t incomingDmgAmount = 0;
 volatile int16_t incomingDmgMask = 0;
-uint8_t anomalyMac[6];
 
 volatile bool newRadReceived = false;
 volatile int16_t incomingRadAmount = 0;
@@ -1846,10 +2476,12 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   memcpy(&pkt, data, sizeof(Packet));
 
   if (pkt.msg_type == MSG_DAMAGE && pkt.val1 > 0) {
-    // Проверяем: функция АНОМАЛИИ (бит 5) включена?
-    if (!(cfgFuncFlags & (1 << 5)))
-      return; // аномалии отключены
-    noteAnomalySignal(info);
+    incomingFromPlayer = (pkt.emitter == EMITTER_PLAYER);
+    incomingControllerPsi = incomingFromPlayer && ((pkt.val3 & (1 << 5)) != 0);
+    if (!incomingFromPlayer && !(cfgFuncFlags & (1 << 5)))
+      return;
+    if (pkt.emitter == EMITTER_ANOMALY)
+      noteAnomalySignal(info);
     incomingDmgAmount = pkt.val1;
     incomingDmgMask = pkt.val3;
     memcpy(anomalyMac, info->src_addr, 6);
@@ -1870,12 +2502,27 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       if (t >= 0 && t <= 7)
         zoneProt[t] = (int)pkt.val2;
     } else if (pkt.val3 == SZ_BEACON_FLAG) {
-      // Только обновление lastSafeZoneMs
+      szEmissionProtect = pkt.val1 != 0;
     } else {
       szHealAmount = pkt.val1;
       szRadAmount = pkt.val2;
       newSafeZoneReceived = true;
     }
+
+  } else if (pkt.msg_type == MSG_EMISSION) {
+    incomingEmissionTimer = pkt.val1;
+    incomingEmissionDur = pkt.val2;
+    newEmissionReceived = true;
+
+  } else if (pkt.msg_type == MSG_COMMAND) {
+    incomingCmd = pkt.val1;
+    incomingCmdVal2 = pkt.val2;
+    newCommandReceived = true;
+
+  } else if (pkt.msg_type == MSG_RADIO) {
+    incomingRadioTrack = pkt.val1;
+    incomingRadioVol = pkt.val2;
+    newRadioReceived = true;
   }
 }
 
@@ -1886,7 +2533,7 @@ Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 U8G2_FOR_ADAFRUIT_GFX u8g2;
 
 int8_t currentPage = 0;
-#define NUM_PAGES 6
+#define NUM_PAGES 3
 bool needFullRedraw = true;
 
 char eventText[48] = "";
@@ -2152,6 +2799,17 @@ void setEvent(const char *text, uint16_t color) {
   eventColor = color;
   eventTimeMs = millis();
   needFullRedraw = true;
+  if (notifyCount < 5) {
+    strncpy(notifyLog[notifyCount], eventText, 47);
+    notifyLog[notifyCount][47] = '\0';
+    notifyCount++;
+  } else {
+    for (uint8_t i = 0; i < 4; i++)
+      memcpy(notifyLog[i], notifyLog[i + 1], 48);
+    strncpy(notifyLog[4], eventText, 47);
+    notifyLog[4][47] = '\0';
+  }
+  notifyIdx = notifyCount ? notifyCount - 1 : 0;
 }
 
 // ─── СТРАНИЦА 0: ГЛАВНАЯ ───
@@ -2198,6 +2856,25 @@ void drawPage0() {
   if (cfgFuncFlags & (1 << 2)) {
     String moneyTxt = String(playerMoney) + " RUB";
     printRusStr(12, y, moneyTxt, C_CYAN);
+    y += 22;
+  }
+
+  if (inAgony())
+    printRus(12, y, "АГОНИЯ", C_RED);
+  else if (actorRole == ROLE_CONTROLLER)
+    printRus(12, y, "КОНТРОЛЛЕР", C_PURPLE);
+  else if (actorRole == ROLE_MUTANT)
+    printRus(12, y, "МУТАНТ", C_ORANGE);
+
+  if (emissionTimer > 0) {
+    char em[28];
+    snprintf(em, sizeof(em), "ВЫБРОС через %dс", emissionTimer);
+    printRusStr(12, EVT_Y - 24, String(em), C_RED);
+  } else if (emissionTimer == 0 && emissionDuration > 0) {
+    printRus(12, EVT_Y - 24, "ВЫБРОС!", C_RED);
+  } else if (notifyCount) {
+    uint8_t i2 = notifyIdx > 0 ? notifyIdx - 1 : notifyIdx;
+    printRusStr(12, EVT_Y - 24, String(notifyLog[i2]), C_LGRAY);
   }
 
   drawPageIndicator();
@@ -2241,10 +2918,9 @@ void drawPage1() {
     }
   }
 
+  printRus(12, 188, "ВНИЗ — слот ремонта/улучш.", C_DGRAY);
   drawPageIndicator();
 }
-
-// ─── СТРАНИЦА 2: СОПРОТИВЛЕНИЯ ───
 void drawPage2() {
   printRus(84, 8, "СОПРОТИВЛЕНИЯ", C_BORDER);
   tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
@@ -2354,8 +3030,62 @@ void drawPage5() {
 
   printRus(12, 168, "ВНИЗ — тише", C_LGRAY);
   printRus(12, 188, "ОК — громче", C_LGRAY);
-  printRus(12, 208, "ВПРАВО / ESC — страницы", C_DGRAY);
+  printRus(12, 208, "ESC — назад в меню", C_DGRAY);
 
+  drawPageIndicator();
+}
+
+void drawMenuList() {
+  printRus(120, 8, "МЕНЮ", C_BORDER);
+  tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
+  const char *items[MENU_COUNT] = {"СОПРОТИВЛЕНИЯ", "ЗАДАНИЯ", "ДОСТИЖЕНИЯ",
+                                   "СДАТЬСЯ",       "НАСТРОЙКИ", "UWB"};
+  for (uint8_t i = 0; i < MENU_COUNT; i++) {
+    int y = 40 + i * 26;
+    if (menuIndex == i) {
+      tft.fillRect(8, y - 2, SCR_W - 16, 24, C_DGRAY);
+      printRus(16, y, ">", C_WHITE);
+      printRus(32, y, items[i], C_WHITE);
+    } else {
+      printRus(32, y, items[i], C_LGRAY);
+    }
+  }
+  drawPageIndicator();
+}
+
+void drawAchPage() {
+  printRus(96, 8, "ДОСТИЖЕНИЯ", C_BORDER);
+  tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
+  uint8_t shown = 0;
+  uint8_t skipped = 0;
+  for (uint8_t id = 0; id < ACH_COUNT && shown < 8; id++) {
+    if (!hasAchievement(id))
+      continue;
+    if (skipped < achScroll) {
+      skipped++;
+      continue;
+    }
+    int y = 40 + shown * 20;
+    printRus(12, y, ACH_TABLE[id].name, C_PURPLE);
+    shown++;
+  }
+  if (shown == 0)
+    printRus(72, 80, "ПОКА ПУСТО", C_DGRAY);
+  printRus(12, 210, "ВНИЗ — далее  ESC — меню", C_DGRAY);
+  drawPageIndicator();
+}
+
+void drawSurrenderPage() {
+  printRus(108, 8, "СДАТЬСЯ", C_BORDER);
+  tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
+  if (playerZombie)
+    printRus(48, 72, "ВЫЙТИ ИЗ ЗОМБИ", C_PURPLE);
+  else
+    printRus(36, 72, "ДОБРОВОЛЬНАЯ СМЕРТЬ", C_RED);
+  printRus(40, 110, "ДВА РАЗА ОК", C_YELLOW);
+  if (surrenderStep)
+    printRus(48, 148, "ЕЩЁ РАЗ ОК", C_ORANGE);
+  printRus(60, 188, "ESC — отмена", C_DGRAY);
   drawPageIndicator();
 }
 
@@ -2394,16 +3124,22 @@ void drawScreen() {
     drawPage1();
     break;
   case 2:
-    drawPage2();
-    break;
-  case 3:
-    drawPage3();
-    break;
-  case 4:
-    drawPage4();
-    break;
-  case 5:
-    drawPage5();
+    if (menuSub < 0)
+      drawMenuList();
+    else if (menuSub == 0)
+      drawPage2();
+    else if (menuSub == 1)
+      drawPage4();
+    else if (menuSub == 2)
+      drawAchPage();
+    else if (menuSub == 3)
+      drawSurrenderPage();
+    else if (menuSub == 4)
+      drawPage5();
+    else if (menuSub == 5)
+      drawPage3();
+    else
+      drawMenuList();
     break;
   }
 
@@ -2416,10 +3152,29 @@ void drawScreen() {
     tft.fillRect(8, EVT_Y - 4, SCR_W - 16, 18, C_BLACK);
   }
 
-  if (playerDead) {
+  if (playerZombie) {
+    tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_PURPLE);
+    printRus(96, 12, "ВЫ ЗОМБИ", C_PURPLE);
+    printRus(48, 32, "ВЫХОД: СДАТЬСЯ", C_LGRAY);
+  } else if (playerDead) {
     tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_RED);
     printRus(60, 12, "СВЯЗЬ ПОТЕРЯНА", C_RED);
     printRus(72, 32, "ВОСКРЕШЕНИЕ", C_LGRAY);
+  }
+
+  if (emissionTimer == 0 && emissionDuration > 0 && ((millis() / 500) % 2))
+    tft.drawRect(2, 2, SCR_W - 4, SCR_H - 4, C_RED);
+
+  if (inAgony() && ((millis() / 400) % 2))
+    tft.drawRect(6, 6, SCR_W - 12, SCR_H - 12, C_ORANGE);
+
+  if (chipConfirmPending) {
+    tft.fillRect(24, 70, SCR_W - 48, 100, C_BLACK);
+    tft.drawRect(24, 70, SCR_W - 48, 100, C_YELLOW);
+    printRus(48, 88, "ИСПОЛЬЗОВАТЬ?", C_YELLOW);
+    printRusStr(48, 112, String(pendingChipName[0] ? pendingChipName : "ЧИП"),
+                C_WHITE);
+    printRus(48, 140, "ОК — да   ESC — нет", C_LGRAY);
   }
 }
 
@@ -2471,25 +3226,68 @@ void adjustVolume(int delta) {
 }
 
 void handleButtons() {
-  // DN — вниз / громкость− в настройках. RT/ESC — страницы. OK — громкость+ в настройках.
-  if (btnPressed(0)) {
-    if (currentPage == 1)
+  if (chipConfirmPending) {
+    if (btnPressed(0)) {
       selectedRow = (selectedRow + 1) % 4;
-    else if (currentPage == 5)
-      adjustVolume(-2);
+      currentPage = 1;
+      needFullRedraw = true;
+    }
+    if (btnPressed(2))
+      confirmPendingChip();
+    if (btnPressed(3))
+      rejectPendingChip();
+    btnPressed(1);
+    return;
+  }
+
+  if (btnPressed(0)) {
+    if (currentPage == 0) {
+      if (notifyCount)
+        notifyIdx = (notifyIdx + 1) % notifyCount;
+    } else if (currentPage == 1)
+      selectedRow = (selectedRow + 1) % 4;
+    else if (currentPage == 2) {
+      if (menuSub < 0)
+        menuIndex = (menuIndex + 1) % MENU_COUNT;
+      else if (menuSub == 1 && activeTaskCount)
+        questSel = (questSel + 1) % activeTaskCount;
+      else if (menuSub == 2)
+        achScroll = (uint8_t)(achScroll + 1);
+      else if (menuSub == 4)
+        adjustVolume(-2);
+    }
     needFullRedraw = true;
   }
   if (btnPressed(1)) {
-    currentPage = (currentPage + 1) % NUM_PAGES;
+    if (!(currentPage == 2 && menuSub >= 0))
+      currentPage = (currentPage + 1) % NUM_PAGES;
     needFullRedraw = true;
   }
   if (btnPressed(2)) {
-    if (currentPage == 5)
-      adjustVolume(2);
+    if (currentPage == 2) {
+      if (menuSub < 0) {
+        menuSub = (int8_t)menuIndex;
+        surrenderStep = 0;
+        achScroll = 0;
+      } else if (menuSub == 3) {
+        if (surrenderStep == 0)
+          surrenderStep = 1;
+        else {
+          doSurrender();
+          surrenderStep = 0;
+          menuSub = -1;
+        }
+      } else if (menuSub == 4)
+        adjustVolume(2);
+    }
     needFullRedraw = true;
   }
   if (btnPressed(3)) {
-    currentPage = (currentPage + NUM_PAGES - 1) % NUM_PAGES;
+    if (currentPage == 2 && menuSub >= 0) {
+      menuSub = -1;
+      surrenderStep = 0;
+    } else
+      currentPage = (currentPage + NUM_PAGES - 1) % NUM_PAGES;
     needFullRedraw = true;
   }
 }
@@ -2566,7 +3364,9 @@ void setup() {
   tft.fillScreen(C_BLACK);
 
   sessionStartMs = millis();
+  lastGameTickMs = millis();
   lastDeathAtLevelUp = playerDeaths;
+  grantAchievement(ACH_START_FIRST);
   bu03LastPollMs = millis();
   Serial.println("PDA v2.7 READY");
   Serial.print("FUNC flags=");
@@ -2596,51 +3396,40 @@ void loop() {
     }
   }
 
-  // ─── Обработка DAMAGE (аномалии) ───
+  // ─── Обработка DAMAGE (аномалии / PvP / пси) ───
   if (newDamageReceived) {
     newDamageReceived = false;
-    if (admitPending || playerDead) {
-      // Бой заблокирован: нет допуска или смерть в игре
+    bool fromPlayer = incomingFromPlayer;
+    bool psi = incomingControllerPsi;
+    incomingFromPlayer = false;
+    incomingControllerPsi = false;
+    if (admitPending || playerDead || playerZombie) {
+      // бой заблокирован
+    } else if (fromPlayer && !psi && playerLevel < LVL_ARENA) {
+      setEvent("АРЕНА С УР.12", C_ORANGE);
     } else {
     lastDamageMs = millis();
-    noteAnomalyDiscovery(anomalyMac);
+    if (!fromPlayer)
+      noteAnomalyDiscovery(anomalyMac);
+    else {
+      arenaFights++;
+      grantAchievement(ACH_ARENA_FIRST);
+    }
 
-    if (cfgFuncFlags & (1 << 0)) { // HP система включена
-      int dmg = incomingDmgAmount;
-      uint16_t mask = (uint16_t)incomingDmgMask;
-      int res = 0;
-      for (int b = 0; b < 7; b++) {
-        if (mask & (1 << b)) {
-          int r = protForType(b);
-          if (isInSafeZone())
-            r += zoneProt[b];
-          res = max(res, min(100, r));
-        }
-      }
-      int actualDmg = dmg * (100 - res) / 100;
-      if (actualDmg < 0)
-        actualDmg = 0;
-      if (immuneUntilMs && millis() < immuneUntilMs)
-        actualDmg = 0;
-
-      playerHP -= actualDmg;
-      if (playerHP <= 0) {
-        playerHP = 0;
-        playerDead = true;
-        playerDeaths++;
-      }
-      saveState();
-
+    if (cfgFuncFlags & (1 << 0)) {
+      const char *src = psi ? "PSI" : (fromPlayer ? "PVP" : "ANOMALY");
+      int actualDmg = applyHpDamage(incomingDmgAmount, (uint16_t)incomingDmgMask,
+                                    src, true);
       if (isAudioReady)
         myDFPlayer.playMp3Folder(1);
-
-      char buf[30];
-      snprintf(buf, sizeof(buf), "УРОН: -%d HP", actualDmg);
-      setEvent(buf, C_RED);
+      if (!playerDead && !playerZombie) {
+        char buf[30];
+        snprintf(buf, sizeof(buf), "УРОН: -%d HP", actualDmg);
+        setEvent(buf, C_RED);
+      }
       needFullRedraw = true;
     }
 
-    // ACK (всегда отправляем, даже если HP отключён)
     Packet ackPkt;
     ackPkt.emitter = EMITTER_PLAYER;
     ackPkt.msg_type = MSG_ACK;
@@ -2657,10 +3446,67 @@ void loop() {
     }
   }
 
+  if (newEmissionReceived) {
+    newEmissionReceived = false;
+    startEmission(incomingEmissionTimer, incomingEmissionDur);
+  }
+
+  if (newCommandReceived) {
+    newCommandReceived = false;
+    int16_t cmd = incomingCmd;
+    int16_t v2 = incomingCmdVal2;
+    if (cmd == CMD_KILL)
+      markDead();
+    else if (cmd == CMD_REVIVE) {
+      if (playerZombie)
+        setEvent("ЗОМБИ: СДАТЬСЯ", C_RED);
+      else if (playerDead) {
+        playerDead = false;
+        playerHP = playerMaxHP;
+        playerRad = 0;
+        grantAchievement(ACH_REVIVE_FIRST);
+        pulseVibro(400);
+        saveState();
+        setEvent("СВЯЗЬ ВОССТАНОВЛЕНА", C_GREEN);
+      }
+    } else if (cmd == CMD_WIPE) {
+      ChipHeader wipe = {};
+      wipe.sub = CHIP_ADM_RESET;
+      applyAdminChip(wipe, "");
+    } else if (cmd == CMD_ADD_MONEY) {
+      playerMoney += v2;
+      saveState();
+    } else if (cmd == CMD_ADD_XP) {
+      playerXP += v2;
+      checkLevelUps();
+      saveState();
+    } else if (cmd == CMD_ADMIT) {
+      admitPending = false;
+      completeRegistration(nullptr);
+      grantAchievement(ACH_START_FIRST);
+      setEvent("ДОПУСК В ИГРУ", C_GREEN);
+    }
+    needFullRedraw = true;
+  }
+
+  if (newRadioReceived) {
+    newRadioReceived = false;
+    if (incomingRadioVol >= 0) {
+      dfVolume = (uint8_t)constrain(incomingRadioVol, 0, 30);
+      saveConfig();
+      applyDfVolume();
+    }
+    if (isAudioReady && incomingRadioTrack > 0) {
+      applyDfVolume();
+      myDFPlayer.playMp3Folder(incomingRadioTrack);
+    }
+    setEvent("РАДИО", C_CYAN);
+  }
+
   // ─── Обработка RADIATION ───
   if (newRadReceived) {
     newRadReceived = false;
-    if (!admitPending && !playerDead && (cfgFuncFlags & (1 << 1))) { // RAD функция включена
+    if (!isCombatLocked() && (cfgFuncFlags & (1 << 1))) {
       int radRes = protForType(7);
       if (isInSafeZone())
         radRes += zoneProt[7];
@@ -2670,10 +3516,7 @@ void loop() {
         actualRad = 0;
       if (immuneUntilMs && millis() < immuneUntilMs)
         actualRad = 0;
-      playerRad += actualRad;
-      if (playerRad > playerMaxRad)
-        playerRad = playerMaxRad;
-      saveState();
+      applyRadGain(actualRad);
       char rbuf[24];
       snprintf(rbuf, sizeof(rbuf), "RAD: +%d", actualRad);
       setEvent(rbuf, C_ORANGE);
@@ -2684,19 +3527,20 @@ void loop() {
   // ─── Обработка Safe Zone (лечение) ───
   if (newSafeZoneReceived) {
     newSafeZoneReceived = false;
-    if (admitPending || playerDead) {
-      lastSafeZoneMs = millis();
-    } else {
     lastSafeZoneMs = millis();
-
-    if (cfgFuncFlags & (1 << 0)) { // HP включена
+    if (!isCombatLocked()) {
+    if (cfgFuncFlags & (1 << 0)) {
       if (playerHP > 0 && playerHP < playerMaxHP && szHealAmount > 0) {
         playerHP += szHealAmount;
         if (playerHP > playerMaxHP)
           playerHP = playerMaxHP;
+        zzHealTotal += szHealAmount;
+        grantAchievement(ACH_ZZ_FIRST);
+        if (zzHealTotal >= 500)
+          grantAchievement(ACH_ZZ_HEAL_500);
       }
     }
-    if (cfgFuncFlags & (1 << 1)) { // RAD включена
+    if (cfgFuncFlags & (1 << 1)) {
       if (szRadAmount > 0 && playerRad > 0) {
         playerRad -= szRadAmount;
         if (playerRad < 0)
@@ -2717,31 +3561,31 @@ void loop() {
     }
   }
 
-  // ─── LED и вибро (batch 2: зелёный=ЗЗ постоянно; красный=вспышка урона;
-  //     мигание красного при детекторе+аномалия — TODO Фаза 5) ───
   digitalWrite(LED_GREEN, isInSafeZone() ? HIGH : LOW);
 
-  // Красный LED: вспышка в момент урона (~1 с)
-  if (lastDamageMs > 0 && (millis() - lastDamageMs < 1000)) {
-    digitalWrite(LED_RED, HIGH);
-  } else {
-    digitalWrite(LED_RED, LOW);
+  bool detBlink = isAnomalyDetectorActive() && ((millis() / 250) % 2);
+  bool dmgFlash = lastDamageMs > 0 && (millis() - lastDamageMs < 1000);
+  digitalWrite(LED_RED, (dmgFlash || detBlink) ? HIGH : LOW);
+
+  bool vibroOn = (lastDamageMs > 0 && millis() - lastDamageMs < 250) ||
+                 (achVibroUntilMs > 0 && millis() < achVibroUntilMs);
+  digitalWrite(PIN_VIBRO, vibroOn ? HIGH : LOW);
+
+  // ─── Выживание без смерти ───
+  if ((cfgFuncFlags & (1 << 6)) && playerDeaths == lastDeathAtLevelUp &&
+      sessionStartMs > 0) {
+    uint32_t alive = millis() - sessionStartMs;
+    if (alive >= 7200000UL)
+      grantAchievement(ACH_SURVIVE_2H);
+    if (alive >= 14400000UL)
+      grantAchievement(ACH_SURVIVE_4H);
+    if (alive >= 28800000UL)
+      grantAchievement(ACH_SURVIVE_8H);
   }
 
-  // Вибро: урон (250 мс); достижение/ранг — отдельный таймер.
-  // TODO Фаза 5: вибро на все типы setEvent при VIB ВКЛ (см. MASTER_SPEC §10)
-  if ((lastDamageMs > 0 && millis() - lastDamageMs < 250) ||
-      (achVibroUntilMs > 0 && millis() < achVibroUntilMs)) {
-    digitalWrite(PIN_VIBRO, HIGH);
-  } else {
-    digitalWrite(PIN_VIBRO, LOW);
-  }
-
-  // ─── Выживание 2 ч без смерти (достижение) ───
-  if ((cfgFuncFlags & (1 << 6)) && !hasAchievement(ACH_SURVIVE_2H) &&
-      playerDeaths == lastDeathAtLevelUp && sessionStartMs > 0 &&
-      (millis() - sessionStartMs >= 7200000UL)) {
-    grantAchievement(ACH_SURVIVE_2H);
+  if (millis() - lastGameTickMs >= 1000) {
+    lastGameTickMs = millis();
+    gameTick();
   }
 
   // ─── EEPROM CH0: терминалы TXN + applyChip (слоты 2/3/5/6) ~200 ms ───
@@ -2756,7 +3600,7 @@ void loop() {
       millis() - bu03LastPollMs >= BU03_POLL_MS) {
     bu03LastPollMs = millis();
     pollBu03Distance();
-    if (currentPage == 3 || currentPage == 4)
+    if (currentPage == 2 && menuSub == 5)
       needFullRedraw = true;
   }
 

@@ -261,7 +261,8 @@ void cmdTxnStart(const String &args) {
     case TXN_OP_QUEST:
         txn_build_quest(block, (uint32_t)txnId, (uint16_t)item, amount,
                         questId.length() ? questId.c_str() : nullptr,
-                        (flags & TXN_FLAG_QUEST_COMPLETE) != 0);
+                        (flags & TXN_FLAG_QUEST_COMPLETE) != 0,
+                        (flags & TXN_FLAG_QUEST_HIDDEN) != 0);
         break;
     case TXN_OP_ADMIT:
         txn_build_admit(block, (uint32_t)txnId);
