@@ -29,9 +29,9 @@
  * ║ • Вибро: whitelist событий (ключ VIB = питание);  ║
  * ║   смерть, RAD, level_up, достижение, ранг,      ║
  * ║   воскрешение, выброс/info; не деньги/покупки)   ║
- * ║ UI: 3 top-level страницы: 0 Главная, 1 Инвентарь, 2 Меню    ║
- * ║   (сопротивления / квесты / достижения / сдаться /         ║
- * ║    настройки / UWB)                                        ║
+ * ║ • Агония: после HP=0 (не 10%); аптечка/ЗЗ/heal     ║
+ * ║   или повторный удар / сдаться. Зомби: только       ║
+ * ║   сдаться; входящие TXN без notify, кроме broadcast ║
  * ╠══════════════════════════════════════════════════╣
  * ║ Советы по сборке (сессия 06.2026):                ║
  * ║ • DFPlayer + вибро — 5V BUS (TPS63020), не USB   ║
@@ -164,7 +164,6 @@ struct Packet {
 #define EMISSION_DMG_TICK 250
 #define EMISSION_RAD_TICK 250
 #define RAD_SICKNESS_HP 10
-#define AGONY_PCT 10
 #define ROLE_STALKER 0
 #define ROLE_CONTROLLER 1
 #define ROLE_MUTANT 2
@@ -194,6 +193,7 @@ int playerXP = 0;
 int playerLevel = 1;
 int playerDeaths = 0;
 bool playerDead = false;
+bool playerAgony = false;
 bool playerZombie = false;
 bool admitPending = true;
 int cheatShieldCount = 0;
@@ -277,7 +277,9 @@ uint8_t dfVolume = 20;                          // DFPlayer 0–30, радио +
 // =====================================================
 // ПРОГРЕССИЯ v4 — MASTER_SPEC §8.5, hardware/PROGRESSION.txt
 // =====================================================
-void setEvent(const char *text, uint16_t color);
+void setEvent(const char *text, uint16_t color, bool admin = false);
+void markAgony();
+void clearAgony();
 void checkLevelUps();
 void checkRankReadyNotify();
 void saveState();
@@ -400,6 +402,8 @@ bool hasAchievement(uint8_t id) {
 }
 
 void pulseVibro(uint16_t ms) {
+  if (playerZombie)
+    return;
   achVibroUntilMs = millis() + ms;
 }
 
@@ -412,11 +416,13 @@ void grantAchievement(uint8_t id) {
   const AchDef &a = ACH_TABLE[id];
   playerXP += a.xp;
   playerMoney += a.rub;
-  char buf[56];
-  snprintf(buf, sizeof(buf), "ДОСТИЖЕНИЕ: %s +%dXP +%dRUB", a.name, a.xp,
-           a.rub);
-  setEvent(buf, C_PURPLE);
-  pulseVibro(350);
+  if (!playerZombie) {
+    char buf[56];
+    snprintf(buf, sizeof(buf), "ДОСТИЖЕНИЕ: %s +%dXP +%dRUB", a.name, a.xp,
+             a.rub);
+    setEvent(buf, C_PURPLE);
+    pulseVibro(350);
+  }
   saveState();
   checkLevelUps();
   checkRankReadyNotify();
@@ -431,10 +437,12 @@ void checkRankReadyNotify() {
   if (playerLevel < RANK_TIERS[next].minLevel)
     return;
   rankReadyNotified[next] = true;
+  if (playerZombie)
+    return;
   char buf[40];
   snprintf(buf, sizeof(buf), "РАНГ ДОСТУПЕН: %s", RANK_TIERS[next].title);
   setEvent(buf, C_YELLOW);
-  achVibroUntilMs = millis() + 500;
+  pulseVibro(500);
 }
 
 void checkLevelUps() {
@@ -701,7 +709,7 @@ bool txnFinalizeChUniversal(uint32_t txnId, uint8_t *block, const TxnOutcome &o)
 
 void txnHandlePurchase(int32_t baseAmount, uint16_t itemId, TxnOutcome &o) {
   o.flagsOut = 0;
-  if (admitPending || playerDead) {
+  if (admitPending || playerDead || playerZombie || playerAgony) {
     txnFailLocked(o);
     return;
   }
@@ -742,7 +750,9 @@ void txnHandlePurchase(int32_t baseAmount, uint16_t itemId, TxnOutcome &o) {
 
 void txnHandleBank(int32_t amount, uint8_t flags, TxnOutcome &o) {
   o.flagsOut = flags;
-  if (admitPending || playerDead) {
+  bool deposit = (flags & TXN_FLAG_BANK_DEPOSIT) != 0;
+  if (admitPending || playerDead || playerAgony ||
+      (playerZombie && deposit)) {
     txnFailLocked(o);
     return;
   }
@@ -756,7 +766,6 @@ void txnHandleBank(int32_t amount, uint8_t flags, TxnOutcome &o) {
     o.balanceAfter = playerMoney;
     return;
   }
-  bool deposit = (flags & TXN_FLAG_BANK_DEPOSIT) != 0;
   if (deposit) {
     if (playerMoney < amount) {
       o.result = TXN_RESULT_INSUFFICIENT_FUNDS;
@@ -814,7 +823,7 @@ void txnHandleQuest(int32_t rubReward, uint16_t questCatId, uint8_t flags,
     snprintf(qid, sizeof(qid), "q%u", (unsigned)questCatId);
   }
 
-  if (admitPending || playerDead) {
+  if (admitPending || playerDead || playerAgony) {
     txnFailLocked(o);
     return;
   }
@@ -1151,6 +1160,8 @@ void applyHealAmount(int amount, bool pct) {
   int add = pct ? (playerMaxHP * amount) / 100 : amount;
   playerHP += add;
   clampHP();
+  if (playerAgony && playerHP > 0)
+    clearAgony();
 }
 
 void applyAntiradAmount(int amount, bool pct) {
@@ -1173,10 +1184,11 @@ bool applyAdminChip(const ChipHeader &hdr, const char *name) {
       return false;
     }
     if (!playerDead) {
-      setEvent("УЖЕ ЖИВ", C_LGRAY);
+      setEvent(playerAgony ? "АГОНИЯ: АПТЕЧКА" : "УЖЕ ЖИВ", C_LGRAY);
       return true;
     }
     playerDead = false;
+    playerAgony = false;
     playerHP = playerMaxHP;
     playerRad = 0;
     grantAchievement(ACH_REVIVE_FIRST);
@@ -1278,6 +1290,12 @@ bool applyAdminChip(const ChipHeader &hdr, const char *name) {
 }
 
 bool applyConsumableChip(const ChipHeader &hdr) {
+  if (playerZombie)
+    return false;
+  if (playerAgony && hdr.sub != CHIP_SUB_HEAL) {
+    setEvent("АГОНИЯ", C_ORANGE);
+    return false;
+  }
   if (!(cfgFuncFlags & (1 << 7)) && hdr.sub != CHIP_SUB_RESTORE &&
       hdr.sub != CHIP_SUB_UPGRADE) {
     setEvent("РАСХОДНИКИ ВЫКЛ", C_ORANGE);
@@ -1392,8 +1410,10 @@ bool tryApplyEquipment(uint8_t ch, ChipSlotRt &st, const ChipHeader &hdr) {
     setEvent("НУЖЕН ДОПУСК", C_RED);
     return false;
   }
-  if (playerDead || playerZombie) {
-    setEvent(playerZombie ? "ЗОМБИ: СДАТЬСЯ" : "НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+  if (playerDead || playerZombie || playerAgony) {
+    setEvent(playerZombie ? "ЗОМБИ: СДАТЬСЯ"
+                          : (playerAgony ? "АГОНИЯ" : "НУЖНО ВОСКРЕШЕНИЕ"),
+             C_RED);
     return false;
   }
   if (hdr.type == CHIP_TYPE_ARMOR) {
@@ -1613,8 +1633,14 @@ bool tryApplyCh0(const ChipHeader &hdr, const char *name) {
     setEvent("НУЖЕН ДОПУСК", C_RED);
     return false;
   }
-  if (playerDead || playerZombie) {
-    setEvent(playerZombie ? "ЗОМБИ: СДАТЬСЯ" : "НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+  if (playerZombie)
+    return false;
+  if (playerDead) {
+    setEvent("НУЖНО ВОСКРЕШЕНИЕ", C_RED);
+    return false;
+  }
+  if (playerAgony && hdr.type != CHIP_TYPE_CONSUMABLE) {
+    setEvent("АГОНИЯ", C_ORANGE);
     return false;
   }
   if (hdr.type == CHIP_TYPE_QUEST)
@@ -1628,7 +1654,7 @@ bool tryApplyCh0(const ChipHeader &hdr, const char *name) {
 }
 
 void tickSlotRegen(ChipSlotRt &st) {
-  if (!st.applied || playerDead || playerZombie || admitPending)
+  if (!st.applied || playerDead || playerZombie || playerAgony || admitPending)
     return;
   int amount = 0;
   int intervalSec = 0;
@@ -1641,8 +1667,6 @@ void tickSlotRegen(ChipSlotRt &st) {
   }
   if (intervalSec <= 0 || amount == 0)
     return;
-  if (playerHP > 0 && playerHP * 100 <= playerMaxHP * AGONY_PCT)
-    intervalSec *= 2;
   uint32_t iv = (uint32_t)intervalSec * 1000UL;
   if (millis() - st.lastRegenMs < iv)
     return;
@@ -1652,7 +1676,7 @@ void tickSlotRegen(ChipSlotRt &st) {
 }
 
 void tickConsumableRegen() {
-  if (playerDead || playerZombie || admitPending)
+  if (playerDead || playerZombie || playerAgony || admitPending)
     return;
   uint32_t now = millis();
   if (consRegenHp && now < consRegenHpUntilMs && now - consRegenHpLastMs >= 1000) {
@@ -1715,6 +1739,17 @@ void pollOneChipSlot(uint8_t ch, ChipSlotRt &st, bool isCh0) {
   }
 
   if (isCh0 && hdr.type == CHIP_TYPE_CONSUMABLE) {
+    if (playerZombie || playerDead) {
+      strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+      st.rejected = true;
+      return;
+    }
+    if (playerAgony && hdr.sub != CHIP_SUB_HEAL) {
+      strncpy(st.label, chipTypeLabel(hdr.type, hdr.sub), sizeof(st.label) - 1);
+      st.rejected = true;
+      setEvent("АГОНИЯ", C_ORANGE);
+      return;
+    }
     chipConfirmPending = true;
     pendingChip = hdr;
     pendingChipCh = ch;
@@ -1766,14 +1801,30 @@ bool isCombatLocked() {
   return admitPending || playerDead || playerZombie;
 }
 
-bool inAgony() {
-  return !playerDead && !playerZombie && playerHP > 0 &&
-         playerHP * 100 <= playerMaxHP * AGONY_PCT;
+bool inAgony() { return playerAgony && !playerDead && !playerZombie; }
+
+void markAgony() {
+  playerHP = 0;
+  playerAgony = true;
+  playerDead = false;
+  playerZombie = false;
+  pulseVibro(400);
+  setEvent("АГОНИЯ", C_ORANGE);
+  saveState();
+}
+
+void clearAgony() {
+  if (!playerAgony)
+    return;
+  playerAgony = false;
+  setEvent("АГОНИЯ ПРОШЛА", C_GREEN);
+  saveState();
 }
 
 void markDead() {
   playerHP = 0;
   playerDead = true;
+  playerAgony = false;
   playerZombie = false;
   playerDeaths++;
   grantAchievement(ACH_DEATH_FIRST);
@@ -1787,10 +1838,11 @@ void markDead() {
 void markZombie() {
   playerHP = 0;
   playerDead = false;
+  playerAgony = false;
   playerZombie = true;
   playerRad = playerMaxRad;
   pulseVibro(500);
-  setEvent("ВЫ ЗОМБИ", C_PURPLE);
+  setEvent("ВЫ ЗОМБИ", C_PURPLE, true);
   saveState();
 }
 
@@ -1799,6 +1851,7 @@ void doSurrender() {
     return;
   if (playerZombie)
     playerZombie = false;
+  playerAgony = false;
   if (!playerDead)
     markDead();
 }
@@ -1812,7 +1865,7 @@ void startEmission(int timerSec, int durSec) {
   emissionDuration = durSec;
   emissionStrikeTick = 0;
   pulseVibro(400);
-  setEvent("ВЫБРОС!", C_RED);
+  setEvent("ВЫБРОС!", C_RED, true);
   if (isAudioReady)
     myDFPlayer.playMp3Folder(2);
 }
@@ -1853,8 +1906,15 @@ void applyRadGain(int actualRad) {
 }
 
 int applyHpDamage(int dmg, uint16_t mask, const char *source, bool iframe) {
-  if (isCombatLocked() || dmg <= 0)
+  if (admitPending || playerDead || playerZombie || dmg <= 0)
     return 0;
+  if (playerAgony) {
+    if (source && (!strcmp(source, "EMISSION") || !strcmp(source, "PSI")))
+      markZombie();
+    else
+      markDead();
+    return dmg;
+  }
   if (iframe && lastIframeMs && (millis() - lastIframeMs < IFRAME_MS) &&
       memcmp(lastIframeMac, anomalyMac, 6) == 0)
     return 0;
@@ -1897,7 +1957,7 @@ int applyHpDamage(int dmg, uint16_t mask, const char *source, bool iframe) {
     if (source && (!strcmp(source, "EMISSION") || !strcmp(source, "PSI")))
       markZombie();
     else
-      markDead();
+      markAgony();
   } else {
     saveState();
   }
@@ -1963,13 +2023,13 @@ void gameTick() {
   if (emissionTimer > 0) {
     emissionTimer--;
     if (emissionTimer == 3600)
-      setEvent("ВЫБРОС ЧЕРЕЗ 1Ч", C_RED);
+      setEvent("ВЫБРОС ЧЕРЕЗ 1Ч", C_RED, true);
     else if (emissionTimer == 1800)
-      setEvent("ВЫБРОС ЧЕРЕЗ 30М", C_RED);
+      setEvent("ВЫБРОС ЧЕРЕЗ 30М", C_RED, true);
     else if (emissionTimer == 900)
-      setEvent("ВЫБРОС ЧЕРЕЗ 15М", C_RED);
+      setEvent("ВЫБРОС ЧЕРЕЗ 15М", C_RED, true);
     else if (emissionTimer == 300)
-      setEvent("ВЫБРОС ЧЕРЕЗ 5М", C_RED);
+      setEvent("ВЫБРОС ЧЕРЕЗ 5М", C_RED, true);
     if (emissionTimer == 3600 || emissionTimer == 1800 ||
         emissionTimer == 900 || emissionTimer == 300)
       pulseVibro(400);
@@ -1986,12 +2046,12 @@ void gameTick() {
     } else {
       emissionTimer = -1;
       emissionStrikeTick = 0;
-      setEvent("ВЫБРОС ОКОНЧЕН", C_GREEN);
+      setEvent("ВЫБРОС ОКОНЧЕН", C_GREEN, true);
       pulseVibro(300);
     }
   }
 
-  if (isCombatLocked())
+  if (isCombatLocked() || playerAgony)
     return;
 
   if (playerRad * 2 > playerMaxRad) {
@@ -2026,6 +2086,11 @@ void loadState() {
   playerDeaths = prefs.getInt("deaths", 0);
   playerDead = prefs.getBool("dead", false);
   playerZombie = prefs.getBool("zombie", false);
+  playerAgony = prefs.getBool("agony", false);
+  if (playerDead || playerZombie)
+    playerAgony = false;
+  else if (playerHP <= 0)
+    playerAgony = true;
   playerRank = prefs.getInt("rank", 0);
   achFlags[0] = prefs.getUInt("ach", 0);
   achFlags[1] = prefs.getUInt("ach1", 0);
@@ -2077,6 +2142,7 @@ void saveState() {
   prefs.putInt("deaths", playerDeaths);
   prefs.putBool("dead", playerDead);
   prefs.putBool("zombie", playerZombie);
+  prefs.putBool("agony", playerAgony);
   prefs.putInt("rank", playerRank);
   prefs.putUInt("ach", achFlags[0]);
   prefs.putUInt("ach1", achFlags[1]);
@@ -2234,6 +2300,7 @@ void handleSerialConfig(const String &line) {
       return;
     }
     playerDead = false;
+    playerAgony = false;
     playerHP = playerMaxHP;
     playerRad = 0;
     grantAchievement(ACH_REVIVE_FIRST);
@@ -2251,7 +2318,7 @@ void handleSerialConfig(const String &line) {
     if (text.length() > 47)
       text = text.substring(0, 47);
     if (text.length())
-      setEvent(text.c_str(), C_YELLOW);
+      setEvent(text.c_str(), C_YELLOW, true);
     Serial.println("OK");
     return;
   }
@@ -2426,6 +2493,8 @@ void handleSerialConfig(const String &line) {
     Serial.println(playerDeaths);
     Serial.print("ZOMBIE:");
     Serial.println(playerZombie ? 1 : 0);
+    Serial.print("AGONY:");
+    Serial.println(playerAgony ? 1 : 0);
     Serial.print("SHIELD:");
     Serial.println(cheatShieldCount);
     Serial.print("ROLE:");
@@ -2453,6 +2522,9 @@ void handleSerialConfig(const String &line) {
 volatile bool newDamageReceived = false;
 volatile int16_t incomingDmgAmount = 0;
 volatile int16_t incomingDmgMask = 0;
+
+volatile bool newHealReceived = false;
+volatile int16_t incomingHealAmount = 0;
 
 volatile bool newRadReceived = false;
 volatile int16_t incomingRadAmount = 0;
@@ -2486,6 +2558,10 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     incomingDmgMask = pkt.val3;
     memcpy(anomalyMac, info->src_addr, 6);
     newDamageReceived = true;
+
+  } else if (pkt.msg_type == MSG_HEAL && pkt.val1 > 0) {
+    incomingHealAmount = pkt.val1;
+    newHealReceived = true;
 
   } else if (pkt.msg_type == MSG_RADIATION && pkt.val1 > 0) {
     if (!(cfgFuncFlags & (1 << 1)))
@@ -2793,7 +2869,9 @@ void drawBar(int x, int y, int w, int h, int val, int maxVal, uint16_t colHi,
     tft.fillRect(x + 1 + fw, y + 1, w - 2 - fw, h - 2, C_BLACK);
 }
 
-void setEvent(const char *text, uint16_t color) {
+void setEvent(const char *text, uint16_t color, bool admin) {
+  if (playerZombie && !admin)
+    return;
   strncpy(eventText, text, 47);
   eventText[47] = '\0';
   eventColor = color;
@@ -3116,6 +3194,20 @@ void drawScreen() {
     return;
   }
 
+  if (playerZombie) {
+    tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_PURPLE);
+    printRus(96, 72, "ВЫ ЗОМБИ", C_PURPLE);
+    printRus(48, 110, "ВЫХОД: СДАТЬСЯ", C_LGRAY);
+    printRus(72, 140, "ДВА РАЗА ОК", C_YELLOW);
+    if (surrenderStep)
+      printRus(84, 168, "ЕЩЁ РАЗ ОК", C_ORANGE);
+    if (eventText[0] && (millis() - eventTimeMs < 3500)) {
+      tft.fillRect(8, EVT_Y - 4, SCR_W - 16, 18, C_BLACK);
+      printRus(12, EVT_Y, eventText, eventColor);
+    }
+    return;
+  }
+
   switch (currentPage) {
   case 0:
     drawPage0();
@@ -3152,11 +3244,7 @@ void drawScreen() {
     tft.fillRect(8, EVT_Y - 4, SCR_W - 16, 18, C_BLACK);
   }
 
-  if (playerZombie) {
-    tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_PURPLE);
-    printRus(96, 12, "ВЫ ЗОМБИ", C_PURPLE);
-    printRus(48, 32, "ВЫХОД: СДАТЬСЯ", C_LGRAY);
-  } else if (playerDead) {
+  if (playerDead) {
     tft.drawRect(4, 4, SCR_W - 8, SCR_H - 8, C_RED);
     printRus(60, 12, "СВЯЗЬ ПОТЕРЯНА", C_RED);
     printRus(72, 32, "ВОСКРЕШЕНИЕ", C_LGRAY);
@@ -3165,10 +3253,16 @@ void drawScreen() {
   if (emissionTimer == 0 && emissionDuration > 0 && ((millis() / 500) % 2))
     tft.drawRect(2, 2, SCR_W - 4, SCR_H - 4, C_RED);
 
-  if (inAgony() && ((millis() / 400) % 2))
-    tft.drawRect(6, 6, SCR_W - 12, SCR_H - 12, C_ORANGE);
+  if (inAgony()) {
+    if ((millis() / 400) % 2)
+      tft.drawRect(6, 6, SCR_W - 12, SCR_H - 12, C_ORANGE);
+    printRus(108, 12, "АГОНИЯ", C_ORANGE);
+    printRus(24, 32, "АПТЕЧКА / СДАТЬСЯ", C_LGRAY);
+    if (surrenderStep)
+      printRus(84, 50, "ЕЩЁ РАЗ ОК", C_YELLOW);
+  }
 
-  if (chipConfirmPending) {
+  if (chipConfirmPending && !playerZombie) {
     tft.fillRect(24, 70, SCR_W - 48, 100, C_BLACK);
     tft.drawRect(24, 70, SCR_W - 48, 100, C_YELLOW);
     printRus(48, 88, "ИСПОЛЬЗОВАТЬ?", C_YELLOW);
@@ -3227,6 +3321,22 @@ void adjustVolume(int delta) {
 
 void handleButtons() {
   if (chipConfirmPending) {
+    if (playerZombie || playerDead) {
+      rejectPendingChip();
+      btnPressed(0);
+      btnPressed(1);
+      btnPressed(2);
+      btnPressed(3);
+      return;
+    }
+    if (playerAgony && pendingChip.sub != CHIP_SUB_HEAL) {
+      rejectPendingChip();
+      btnPressed(0);
+      btnPressed(1);
+      btnPressed(2);
+      btnPressed(3);
+      return;
+    }
     if (btnPressed(0)) {
       selectedRow = (selectedRow + 1) % 4;
       currentPage = 1;
@@ -3237,6 +3347,26 @@ void handleButtons() {
     if (btnPressed(3))
       rejectPendingChip();
     btnPressed(1);
+    return;
+  }
+
+  /* Зомби и агония: только двойной OK = сдаться. */
+  if (playerZombie || inAgony()) {
+    btnPressed(0);
+    btnPressed(1);
+    if (btnPressed(2)) {
+      if (surrenderStep == 0)
+        surrenderStep = 1;
+      else {
+        doSurrender();
+        surrenderStep = 0;
+      }
+      needFullRedraw = true;
+    }
+    if (btnPressed(3)) {
+      surrenderStep = 0;
+      needFullRedraw = true;
+    }
     return;
   }
 
@@ -3422,7 +3552,7 @@ void loop() {
                                     src, true);
       if (isAudioReady)
         myDFPlayer.playMp3Folder(1);
-      if (!playerDead && !playerZombie) {
+      if (!playerDead && !playerZombie && !playerAgony) {
         char buf[30];
         snprintf(buf, sizeof(buf), "УРОН: -%d HP", actualDmg);
         setEvent(buf, C_RED);
@@ -3451,6 +3581,16 @@ void loop() {
     startEmission(incomingEmissionTimer, incomingEmissionDur);
   }
 
+  if (newHealReceived) {
+    newHealReceived = false;
+    if (!isCombatLocked() && incomingHealAmount > 0) {
+      applyHealAmount(incomingHealAmount, false);
+      saveState();
+      setEvent("ЛЕЧЕНИЕ", C_GREEN);
+      needFullRedraw = true;
+    }
+  }
+
   if (newCommandReceived) {
     newCommandReceived = false;
     int16_t cmd = incomingCmd;
@@ -3462,6 +3602,7 @@ void loop() {
         setEvent("ЗОМБИ: СДАТЬСЯ", C_RED);
       else if (playerDead) {
         playerDead = false;
+        playerAgony = false;
         playerHP = playerMaxHP;
         playerRad = 0;
         grantAchievement(ACH_REVIVE_FIRST);
@@ -3500,7 +3641,7 @@ void loop() {
       applyDfVolume();
       myDFPlayer.playMp3Folder(incomingRadioTrack);
     }
-    setEvent("РАДИО", C_CYAN);
+    setEvent("РАДИО", C_CYAN, true);
   }
 
   // ─── Обработка RADIATION ───
@@ -3530,10 +3671,8 @@ void loop() {
     lastSafeZoneMs = millis();
     if (!isCombatLocked()) {
     if (cfgFuncFlags & (1 << 0)) {
-      if (playerHP > 0 && playerHP < playerMaxHP && szHealAmount > 0) {
-        playerHP += szHealAmount;
-        if (playerHP > playerMaxHP)
-          playerHP = playerMaxHP;
+      if (playerHP < playerMaxHP && szHealAmount > 0) {
+        applyHealAmount(szHealAmount, false);
         zzHealTotal += szHealAmount;
         grantAchievement(ACH_ZZ_FIRST);
         if (zzHealTotal >= 500)

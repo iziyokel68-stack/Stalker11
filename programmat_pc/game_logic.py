@@ -125,9 +125,10 @@ QUEST_COUNT_ACH = {1: "quest_1", 5: "quest_5", 15: "quest_15", 30: "quest_30", 5
 HIDDEN_QUEST_ACH = {1: "hidden_1", 10: "hidden_10"}
 ANOMALY_COUNT_ACH = {1: "anomaly_1", 5: "anomaly_5", 10: "anomaly_10", 15: "anomaly_15", 20: "anomaly_20", 30: "anomaly_30", 50: "anomaly_50"}
 DMG_TOTAL_ACH = {100: "dmg_100", 500: "dmg_500", 2000: "dmg_2000"}
-AGONY_PCT = 10
 LVL_HIDDEN_QUEST = 20
 LVL_ARENA = 12
+ZOMBIE_NOTIFY_TYPES = {"broadcast", "admin", "emission", "radio"}
+LETHAL_ZOMBIE_SOURCES = ("EMISSION_STRIKE", "controller_psi")
 
 
 def xp_per_level(lvl: int) -> int:
@@ -247,6 +248,7 @@ class Player:
         self.death_counter = 0   # Счетчик смертей
         self.is_dead = False
         self.is_zombie = False   # Роль зомби (RAD 100%, выброс, пси контроллера)
+        self.in_agony = False    # После HP=0 от обычного урона; ещё не is_dead
         self.admit_pending = True  # Ожидание чипа мастера; НЕ сохраняется в NVS
         self.project_id = 0      # ID текущего проекта (0=Stalker, 1=Fallout...)
         self.player_name = ""    # Имя сталкера (NVS), задаётся при регистрации через ПК
@@ -348,18 +350,42 @@ class Player:
         return self.is_system_locked() or self.is_dead or self.is_zombie
 
     def is_in_agony(self) -> bool:
+        """Агония — состояние после потери всех HP, не порог 10%."""
         return (
-            not self.is_dead
+            self.in_agony
+            and not self.is_dead
             and not self.is_zombie
-            and self.health > 0
-            and self.health * 100 <= self.max_health * AGONY_PCT
+            and not self.is_system_locked()
         )
+
+    def _mark_agony(self):
+        self.health = 0
+        self.in_agony = True
+        self.is_dead = False
+        self.is_zombie = False
+        self.save_state()
+        return {"type": "agony", "text": "АГОНИЯ"}
+
+    def _clear_agony(self):
+        if not self.in_agony:
+            return
+        self.in_agony = False
+        self.save_state()
+
+    def _resolve_zero_hp(self, source_id: str):
+        self.health = 0
+        if source_id in LETHAL_ZOMBIE_SOURCES:
+            return self._mark_zombie()
+        if self.in_agony:
+            self._mark_dead()
+            return {"type": "death", "text": "СТАЛКЕР ПОГИБ"}
+        return self._mark_agony()
 
     def start_emission(self, timer_sec: int, duration_sec: int):
         self.emission_timer = max(0, int(timer_sec))
         self.emission_duration = max(0, int(duration_sec))
         self.emission_strike_tick = 0
-        return self.add_notification("ВЫБРОС!", "info", priority=2)
+        return self.add_notification("ВЫБРОС!", "emission", priority=2, admin=True)
 
     def grant_session_admit(self):
         """Чип ДОПУСК В ИГРУ / CmdSub.ADMIT — сессионный вход (главный мастер)."""
@@ -401,6 +427,7 @@ class Player:
         if not self.is_dead:
             return {"type": "error", "text": "ИГРОК ЖИВ"}
         self.is_dead = False
+        self.in_agony = False
         self.health = self.max_health
         self.radiation = 0
         self.save_state()
@@ -412,10 +439,12 @@ class Player:
             return {"type": "error", "text": "НЕДОСТУПНО"}
         if self.is_zombie:
             self.is_zombie = False
+            self.in_agony = False
             self._mark_dead()
             return {"type": "death", "text": "СВЯЗЬ ПОТЕРЯНА"}
         if self.is_dead:
             return {"type": "error", "text": "УЖЕ МЁРТВ"}
+        self.in_agony = False
         self._mark_dead()
         return {"type": "death", "text": "СВЯЗЬ ПОТЕРЯНА"}
 
@@ -471,6 +500,7 @@ class Player:
             "registered": self.registered,
             "player_name": self.player_name,
             "is_zombie": self.is_zombie,
+            "in_agony": self.in_agony,
             "cheat_shield_count": self.cheat_shield_count,
             "quests_completed": self.quests_completed,
             "anomaly_sources": list(self.anomaly_sources),
@@ -523,6 +553,11 @@ class Player:
                     self.registered = state.get("registered", False)
                     self.player_name = state.get("player_name", "")
                     self.is_zombie = state.get("is_zombie", False)
+                    self.in_agony = state.get("in_agony", False)
+                    if self.is_dead or self.is_zombie:
+                        self.in_agony = False
+                    elif self.health <= 0:
+                        self.in_agony = True
                     self.cheat_shield_count = state.get("cheat_shield_count", 0)
                     self.quests_completed = state.get("quests_completed", 0)
                     self.anomaly_sources = set(state.get("anomaly_sources", []))
@@ -536,6 +571,7 @@ class Player:
         self.health = 0
         self.is_dead = True
         self.is_zombie = False
+        self.in_agony = False
         self.death_counter += 1
         self.grant_achievement("death_first")
         self.save_state()
@@ -545,6 +581,7 @@ class Player:
         self.health = 0
         self.is_dead = False
         self.is_zombie = True
+        self.in_agony = False
         self.death_counter += 1
         self.save_state()
         return {"type": "zombie", "text": "ВЫ ЗОМБИ"}
@@ -553,6 +590,8 @@ class Player:
         """Получение урона с учетом надетой брони и артефактов"""
         if self.is_combat_locked():
             return None
+        if self.in_agony:
+            return self._resolve_zero_hp(source_id)
 
         # Защита от дублирующихся пакетов (урон не чаще раза в секунду от ОДНОГО источника)
         # Если это радиационный "тик" (dmg_type == -1), пускаем без задержки.
@@ -597,10 +636,7 @@ class Player:
 
         self.health -= actual_damage
         if self.health <= 0:
-            if source_id in ("EMISSION_STRIKE", "controller_psi"):
-                return self._mark_zombie()
-            self._mark_dead()
-            return {"type": "death", "text": "СТАЛКЕР ПОГИБ"}
+            return self._resolve_zero_hp(source_id)
 
         self.save_state()
         return {"type": "damage", "text": f"УРОН: -{actual_damage} HP", "value": actual_damage}
@@ -614,6 +650,8 @@ class Player:
         """
         if self.is_combat_locked():
             return None
+        if self.in_agony:
+            return self._resolve_zero_hp(source_id)
         if dmg_mask == 0:
             return None
 
@@ -659,10 +697,7 @@ class Player:
                 self._check_damage_achievements()
             self.health -= total_damage
             if self.health <= 0:
-                if source_id in ("EMISSION_STRIKE", "controller_psi"):
-                    return self._mark_zombie()
-                self._mark_dead()
-                return {"type": "death", "text": "СТАЛКЕР ПОГИБ"}
+                return self._resolve_zero_hp(source_id)
             n = len(types_hit)
             suffix = f" ({n} типа)" if n > 1 else ""
             events.append({"type": "damage", "text": f"УРОН: -{total_damage} HP{suffix}", "value": total_damage})
@@ -673,10 +708,12 @@ class Player:
 
 
     def apply_heal(self, amount):
-        """Лечение"""
+        """Лечение (в т.ч. выход из агонии). Не работает при смерти/зомби."""
         if self.is_combat_locked():
             return None
         self.health = min(self.health + amount, self.max_health)
+        if self.in_agony and self.health > 0:
+            self._clear_agony()
         self.save_state()
         return {"type": "heal", "text": f"ЛЕЧЕНИЕ: +{amount} HP"}
 
@@ -727,7 +764,7 @@ class Player:
         Метод должен вызываться раз в секунду.
         Обрабатывает периодические эффекты и античит.
         """
-        if self.is_combat_locked():
+        if self.is_system_locked():
             return None
 
         # 1. Проверка античита (RSSI-базированая)
@@ -743,7 +780,7 @@ class Player:
                 self.save_state()
                 return {"type": "info", "text": "СИГНАЛ ПРЕРВАН"}
 
-        # 2. Обработка Выброса (Emission)
+        # 2. Обработка Выброса (Emission) — предупреждения идут и зомби (admin broadcast)
         if self.emission_timer > 0:
             self.emission_timer -= 1
             # Дискретные уведомления на экран
@@ -754,7 +791,9 @@ class Player:
                 300:  "ВНИМАНИЕ: Выброс через 5 минут",
             }
             if self.emission_timer in thresholds:
-                return self.add_notification(thresholds[self.emission_timer])
+                return self.add_notification(
+                    thresholds[self.emission_timer], "emission", priority=2, admin=True
+                )
 
         elif self.emission_timer == 0:
             if self.emission_duration > 0:
@@ -766,17 +805,19 @@ class Player:
                     self, "sz_emission_protect", False
                 )
                 
-                if not is_safe:
-                    # Каждые 10 секунд — урон
+                if not is_safe and not self.is_dead and not self.is_zombie:
+                    # Каждые 10 секунд — урон (агония: удар → зомби)
                     if self.emission_strike_tick % 10 == 0:
-                        # Тихий урон (без текстовых ивентов в консоль/экран, если не смерть)
                         self.apply_damage(EMISSION_DMG_PER_TICK, 6, source_id="EMISSION_STRIKE")
-                        self.apply_radiation(EMISSION_RAD_PER_TICK)
-                        # Если игрок умер в процессе, apply_damage сам вернет death event
+                        if not self.is_zombie:
+                            self.apply_radiation(EMISSION_RAD_PER_TICK)
             else:
                 self.emission_timer = -1 # Выброс завершен
                 self.emission_strike_tick = 0
-                return {"type": "info", "text": "ВЫБРОС ОКОНЧЕН"}
+                return self.add_notification("ВЫБРОС ОКОНЧЕН", "emission", priority=2, admin=True)
+
+        if self.is_combat_locked() or self.in_agony:
+            return None
 
         # 3. Стадия 2: Лучевая болезнь (>50% от max_rad)
         if self.radiation > self.max_rad * 0.5:
@@ -807,6 +848,8 @@ class Player:
 
     def spend_money(self, amount):
         """Трата денег"""
+        if self.is_zombie or self.in_agony or self.is_dead:
+            return False
         if self.money >= amount:
             self.money -= amount
             self.save_state()
@@ -850,9 +893,15 @@ class Player:
             return {"type": "error", "text": "НЕИЗВЕСТНАЯ КОМАНДА"}
         if self.admit_pending:
             return {"type": "error", "text": "НУЖЕН ДОПУСК В ИГРУ"}
+        if self.is_zombie:
+            return {"type": "error", "text": "ЗОМБИ: СДАТЬСЯ"}
         if self.is_dead:
             return {"type": "error", "text": "НУЖНО ВОСКРЕШЕНИЕ"}
+        if self.in_agony and item.item_type != ItemChip.TYPE_MEDKIT and not item.modifiers.get("quest"):
+            return {"type": "error", "text": "АГОНИЯ"}
         if item.modifiers.get("quest"):
+            if self.is_zombie or self.in_agony:
+                return {"type": "error", "text": "ЗОМБИ: СДАТЬСЯ" if self.is_zombie else "АГОНИЯ"}
             return self._use_quest_chip(item)
         # Прочность (uses): 255=∞, иначе декремент
         if item.uses != 255:
@@ -875,6 +924,9 @@ class Player:
         тип берётся с чипа, не с номера слота. Слот 1 симулятора = расходник CH0."""
         if slot_index < 0 or slot_index >= len(self.slots):
             return {"type": "error", "text": "НЕТ ТАКОГО СЛОТА"}
+
+        if self.is_zombie or self.in_agony or self.is_dead:
+            return {"type": "error", "text": "ЗОМБИ: СДАТЬСЯ" if self.is_zombie else ("АГОНИЯ" if self.in_agony else "НУЖНО ВОСКРЕШЕНИЕ")}
 
         if slot_index == 1:
             return {"type": "error", "text": "РАСХОДНИК — СЛОТ CH0"}
@@ -1105,8 +1157,11 @@ class Player:
     def get_active_tasks(self) -> List[ActiveTask]:
         return [t for t in self.active_tasks if t.status == "active"]
 
-    def add_notification(self, text: str, ntype: str = "info", priority: int = 0):
-        """Добавить уведомление в историю (макс 5). type: achievement, rank_ready, info…"""
+    def add_notification(self, text: str, ntype: str = "info", priority: int = 0, admin: bool = False):
+        """Добавить уведомление в историю (макс 5). type: achievement, rank_ready, info…
+        Зомби видит только общие оповещения мастера (broadcast / emission / radio)."""
+        if self.is_zombie and not admin and ntype not in ZOMBIE_NOTIFY_TYPES:
+            return {"type": ntype, "text": text, "notify": False}
         self.notifications.append({
             "text": text,
             "time": time.time(),

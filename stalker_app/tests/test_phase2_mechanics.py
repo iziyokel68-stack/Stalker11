@@ -32,6 +32,7 @@ def _player():
     p.registered = True
     p.is_dead = False
     p.is_zombie = False
+    p.in_agony = False
     p.health = 1000
     p.max_health = 1000
     p.radiation = 0
@@ -112,12 +113,72 @@ class RadAgonyShieldTests(unittest.TestCase):
         self.assertEqual(p.health, 1000 - RAD_SICKNESS_TICK_DMG)
         self.assertIn("rad_sick", p.achievements_unlocked)
 
-    def test_agony_at_10_percent(self):
+    def test_ten_percent_hp_is_not_agony(self):
         p = _player()
         p.health = 100
-        self.assertTrue(p.is_in_agony())
-        p.health = 101
         self.assertFalse(p.is_in_agony())
+        p.health = 1
+        self.assertFalse(p.is_in_agony())
+
+    def test_ordinary_hp_zero_is_agony_not_dead(self):
+        p = _player()
+        p.health = 80
+        evt = p.apply_damage(500, source_id="anom1")
+        self.assertEqual(evt["type"], "agony")
+        self.assertTrue(p.is_in_agony())
+        self.assertFalse(p.is_dead)
+        self.assertFalse(p.is_zombie)
+        self.assertEqual(p.health, 0)
+        self.assertEqual(p.death_counter, 0)
+
+    def test_heal_from_agony(self):
+        p = _player()
+        p.health = 10
+        p.apply_damage(400, source_id="anom1")
+        self.assertTrue(p.is_in_agony())
+        evt = p.apply_heal(200)
+        self.assertEqual(evt["type"], "heal")
+        self.assertFalse(p.is_in_agony())
+        self.assertGreater(p.health, 0)
+        self.assertFalse(p.is_dead)
+
+    def test_medkit_from_agony(self):
+        p = _player()
+        p.health = 10
+        p.apply_damage(400, source_id="anom1")
+        chip = ItemChip(item_type=ItemChip.TYPE_MEDKIT, value=150)
+        evt = p.use_consumable(chip)
+        self.assertEqual(evt["type"], "heal")
+        self.assertFalse(p.is_in_agony())
+
+    def test_killing_blow_from_agony(self):
+        p = _player()
+        p.health = 10
+        p.apply_damage(400, source_id="anom1")
+        self.assertTrue(p.is_in_agony())
+        evt = p.apply_damage(10, source_id="anom2")
+        self.assertEqual(evt["type"], "death")
+        self.assertTrue(p.is_dead)
+        self.assertFalse(p.is_in_agony())
+        self.assertEqual(p.death_counter, 1)
+
+    def test_surrender_from_agony(self):
+        p = _player()
+        p.health = 0
+        p.in_agony = True
+        evt = p.surrender()
+        self.assertEqual(evt["type"], "death")
+        self.assertTrue(p.is_dead)
+        self.assertFalse(p.is_in_agony())
+
+    def test_psi_skips_agony_to_zombie(self):
+        p = _player()
+        p.health = 50
+        evt = p.apply_damage(500, source_id="controller_psi")
+        self.assertEqual(evt["type"], "zombie")
+        self.assertTrue(p.is_zombie)
+        self.assertFalse(p.is_in_agony())
+        self.assertFalse(p.is_dead)
 
     def test_cheat_shield_on_rssi_drop(self):
         p = _player()
@@ -143,6 +204,46 @@ class RadAgonyShieldTests(unittest.TestCase):
         self.assertFalse(p.is_zombie)
         self.assertTrue(p.is_dead)
         self.assertEqual(evt["type"], "death")
+
+    def test_zombie_silent_except_admin_broadcast(self):
+        p = _player()
+        p.is_zombie = True
+        p.notifications = []
+        silent = p.add_notification("ПЕРЕВОД +100", "info")
+        self.assertFalse(silent.get("notify"))
+        self.assertEqual(p.notifications, [])
+        p.grant_achievement("death_first")
+        self.assertEqual(p.notifications, [])
+        shown = p.add_notification("ВНИМАНИЕ МАСТЕРА", "broadcast", admin=True)
+        self.assertTrue(shown.get("notify"))
+        self.assertEqual(len(p.notifications), 1)
+
+    def test_zombie_incoming_money_and_quest_silent(self):
+        p = _player()
+        p.is_zombie = True
+        p.notifications = []
+        p.add_money(500)
+        self.assertEqual(p.money, 1500)
+        chip = ItemChip(
+            item_type=ItemChip.TYPE_CONSUMABLE,
+            modifiers={"quest": True, "quest_id": "z1", "title": "Тихое"},
+        )
+        evt = p._use_quest_chip(chip)
+        self.assertEqual(evt["type"], "info")
+        self.assertEqual(len(p.get_active_tasks()), 1)
+        self.assertEqual(p.notifications, [])
+        med = ItemChip(item_type=ItemChip.TYPE_MEDKIT, value=100)
+        blocked = p.use_consumable(med)
+        self.assertEqual(blocked["type"], "error")
+        self.assertFalse(p.spend_money(10))
+
+    def test_zombie_sees_emission_broadcast(self):
+        p = _player()
+        p.is_zombie = True
+        p.notifications = []
+        p.start_emission(5, 20)
+        self.assertEqual(len(p.notifications), 1)
+        self.assertEqual(p.notifications[0]["type"], "emission")
 
 
 class HiddenQuestAndChipsTests(unittest.TestCase):
