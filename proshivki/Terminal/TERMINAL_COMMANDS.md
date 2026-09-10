@@ -152,6 +152,25 @@ TXN:state=N,txn_id=ID,amount=A,item=I,paid=P,balance=B,result=R,result_name=NAME
 
 ---
 
+## Каталог доски заданий (роль QUEST)
+
+Мастер прошивает кассету с ПК (`stalker_app` → «Прошить доску»). `title=` — **последний** ключ, в значении допустимы пробелы и запятые.
+
+| Команда | Ответ | Описание |
+|---------|-------|----------|
+| `QUEST_CATALOG_CLEAR` | `OK:QUEST_CATALOG_CLEAR` | Очистить RAM-каталог (ещё не EEPROM). |
+| `QUEST_ADD:id=Q01,rub=300,mode=timeout,timeout_min=120,hidden=0,title=…` | `OK:QUEST_ADD:Q01` | Добавить/заменить карточку. `mode`: `timeout` / `oneshot` / `shared`. |
+| `QUEST_CATALOG_COMMIT` | `OK:QUEST_CATALOG_COMMIT:count=N` | Записать полный каталог @`0x0800` и висящие карточки @`0x0100`. |
+| `QUEST_DUMP` | `QUEST_DUMP:count=N` + строки `QUEST:…` | Показать RAM-каталог. |
+| `QUEST_CLAIMS` | `QUEST_CLAIMS:count=N` + строки `CLAIM:…` | Слоты выдачи (NVS). |
+| `QUEST_CLAIMS_CLEAR` | `OK:QUEST_CLAIMS_CLEAR` | Сбросить выдачи, пересобрать список на кассете. |
+
+`TXN_START` для QUEST на занятом timeout/oneshot: `ERROR:QUEST_TAKEN`.
+
+ПДА пишет заявку TQ @`0x00A4`; терминал сам ставит QUEST TXN, после SUCCESS обновляет слот и listed-каталог.
+
+---
+
 ## Примеры
 
 ```
@@ -166,6 +185,12 @@ TXN_START:amount=0,item=0,op=3
 TXN_STATUS
 TXN_WAIT:timeout_ms=60000
 TXN_RESET
+
+QUEST_CATALOG_CLEAR
+QUEST_ADD:id=Q01,rub=300,mode=timeout,timeout_min=120,hidden=0,title=Найти ПДА
+QUEST_CATALOG_COMMIT
+QUEST_DUMP
+QUEST_CLAIMS
 
 I2C_SCAN
 EEPROM_PING

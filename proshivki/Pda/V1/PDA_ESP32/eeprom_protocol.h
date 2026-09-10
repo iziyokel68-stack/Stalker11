@@ -20,8 +20,10 @@
  *   0x0000..0x0025  Chip header (38 B): type, sub, uses, params[16], CRC16
  *   0x0026..0x007F  Chip extension (reserved — quest title, strings)
  *   0x0080..0x00A3  Terminal TXN block (36 B): magic ST, state machine, op_type
- *   0x00A4..0x00FF  Post-TXN reserved
- *   0x0100..         Test / future regions (see EEPROM_TCA_Test)
+ *   0x00A4..0x00BB  QUEST take request (24 B, magic TQ) — PDA → terminal
+ *   0x00BC..0x00FF  Post-TXN reserved
+ *   0x0100..         QUEST catalog overlay (listed cards) / test / save snapshot
+ *   0x0800..         QUEST full catalog backup on the board cassette
  *
  * TXN block layout and helpers: eeprom_txn.h
  */

@@ -205,3 +205,39 @@ class SerialSession:
                 self.link.dev_id = parsed
                 return parsed, line
         return None, "Нет ID — подключите аномалию или убежище по USB"
+
+    def flash_quest_board(self, cards):
+        """USB → терминал QUEST: записать каталог на кассету EEPROM."""
+        err = self._need_usb()
+        if err:
+            return False, err
+        if self.link.dev_type != "TERMINAL":
+            return False, (
+                f"Подключите терминал QUEST по USB (сейчас {self.link.dev_type})."
+            )
+        from quest_catalog import QuestCard, format_quest_add, QUEST_CAT_MAX
+
+        packed = []
+        for c in cards[:QUEST_CAT_MAX]:
+            if isinstance(c, QuestCard):
+                packed.append(c)
+            else:
+                packed.append(QuestCard(
+                    code=getattr(c, "code", "") or "",
+                    title=getattr(c, "title", "") or "",
+                    rub=int(getattr(c, "reward_rub", 0) or 0),
+                    hidden=bool(getattr(c, "hidden", False)),
+                    mode=getattr(c, "claim_mode", "timeout") or "timeout",
+                    timeout_min=int(getattr(c, "timeout_min", 120) or 120),
+                ))
+        ok_role, msg_role = self.set_terminal_role("QUEST")
+        if not ok_role:
+            return False, msg_role or "Не удалось выставить роль QUEST"
+        cmds = [format_quest_add(c) for c in packed]
+        ok, resp = self.link.flash_quest_catalog(cmds)
+        if not ok:
+            return False, resp or self.link.last_error or "ошибка прошивки доски"
+        extra = ""
+        if len(cards) > QUEST_CAT_MAX:
+            extra = f" (первые {QUEST_CAT_MAX} из {len(cards)})"
+        return True, (resp or "OK") + extra

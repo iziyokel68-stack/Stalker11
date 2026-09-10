@@ -77,8 +77,18 @@ class EventDBTests(unittest.TestCase):
                                 body="Найти ПДА", reward_rub=300, hidden=False)
         q = self.db.get_quest(qid)
         self.assertEqual(q.title, "Первое поручение")
-        self.db.update_quest(qid, reward_rub=500)
-        self.assertEqual(self.db.get_quest(qid).reward_rub, 500)
+        self.assertEqual(q.claim_mode, "timeout")
+        self.assertEqual(q.timeout_min, 120)
+        self.db.update_quest(qid, reward_rub=500, claim_mode="oneshot",
+                             timeout_min=30)
+        q = self.db.get_quest(qid)
+        self.assertEqual(q.reward_rub, 500)
+        self.assertEqual(q.claim_mode, "oneshot")
+        self.assertEqual(q.timeout_min, 30)
+        qid2 = self.db.add_quest(self.event_id, "ALL", "Патруль",
+                                 claim_mode="shared", timeout_min=0)
+        self.assertEqual(self.db.get_quest(qid2).claim_mode, "shared")
+        self.assertEqual(self.db.get_quest(qid2).timeout_min, 120)
 
     def test_close_event_and_csv(self):
         pid = self.db.add_player(self.event_id, "Иван", callsign="Волк")

@@ -389,6 +389,18 @@ class SerialLink:
             return role
         return self.terminal_role
 
+    def flash_quest_catalog(self, add_cmds, timeout_commit=25.0):
+        """Прошить каталог доски: CLEAR + QUEST_ADD* + COMMIT."""
+        ok, resp = self.query_ok("QUEST_CATALOG_CLEAR")
+        if not ok:
+            return False, resp or self.last_error
+        for cmd in add_cmds:
+            ok, resp = self.query_ok(cmd, timeout=3.0)
+            if not ok:
+                return False, resp or self.last_error
+        self.query_ok("QUEST_CLAIMS_CLEAR")
+        return self.query_ok("QUEST_CATALOG_COMMIT", timeout=timeout_commit)
+
     def status_text(self):
         if self.scanning:
             return "[..] Поиск..."

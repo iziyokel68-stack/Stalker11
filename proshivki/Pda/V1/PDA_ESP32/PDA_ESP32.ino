@@ -58,6 +58,7 @@
 #include "mux_channels.h"
 #include "chip_header.h"
 #include "achievements.h"
+#include "quest_catalog.h"
 
 // =====================================================
 // РАСПИНОВКА (ESP32-S3-N16R8) — MASTER_SPECIFICATION §3
@@ -284,6 +285,8 @@ void checkLevelUps();
 void checkRankReadyNotify();
 void saveState();
 void completeRegistration(const char *name);
+void pollQuestBoard();
+bool writeBoardTake(const char *qid, bool complete);
 bool applyDfVolume();
 bool isInSafeZone();
 void markDead();
@@ -344,6 +347,18 @@ struct ActiveTaskStub {
 uint8_t activeTaskCount = 0;
 ActiveTaskStub activeTasks[ACTIVE_TASKS_MAX];
 int8_t selectedRow = 0;
+
+QuestCatRec boardQuests[QUEST_CAT_MAX];
+uint8_t boardQuestCount = 0;
+uint8_t boardVisibleIdx[QUEST_CAT_MAX];
+uint8_t boardVisibleCount = 0;
+uint8_t boardSel = 0;
+bool boardOverlay = false;
+bool boardOverlayDismissed = false;
+bool boardTakePending = false;
+uint32_t boardTakeAtMs = 0;
+uint16_t boardCatCrc = 0;
+bool boardWasPresent = false;
 
 int xpPerLevel(int lvl) {
   if (lvl < 10)
@@ -813,6 +828,7 @@ int findActiveQuest(const char *qid) {
 
 void txnHandleQuest(int32_t rubReward, uint16_t questCatId, uint8_t flags,
                     const char *questIdPrefix, TxnOutcome &o) {
+  boardTakePending = false;
   o.flagsOut = flags;
   char qid[12];
   memset(qid, 0, sizeof(qid));
@@ -884,8 +900,21 @@ void txnHandleQuest(int32_t rubReward, uint16_t questCatId, uint8_t flags,
   }
   ActiveTaskStub &t = activeTasks[activeTaskCount++];
   strncpy(t.id, qid, sizeof(t.id) - 1);
-  snprintf(t.title, sizeof(t.title), "Задание #%u", (unsigned)questCatId);
-  strncpy(t.shortDesc, "Терминал квестов", sizeof(t.shortDesc) - 1);
+  t.id[sizeof(t.id) - 1] = '\0';
+  const char *btitle = nullptr;
+  for (uint8_t i = 0; i < boardQuestCount; i++) {
+    if (strncmp(boardQuests[i].id, qid, 8) == 0) {
+      btitle = boardQuests[i].title;
+      break;
+    }
+  }
+  if (btitle && btitle[0])
+    strncpy(t.title, btitle, sizeof(t.title) - 1);
+  else
+    snprintf(t.title, sizeof(t.title), "Задание #%u", (unsigned)questCatId);
+  t.title[sizeof(t.title) - 1] = '\0';
+  strncpy(t.shortDesc, "Доска заданий", sizeof(t.shortDesc) - 1);
+  t.shortDesc[sizeof(t.shortDesc) - 1] = '\0';
   o.paid = 0;
   o.balanceAfter = playerMoney;
   o.result = TXN_RESULT_OK;
@@ -1009,6 +1038,116 @@ void pollEepromTransaction() {
 
   if (txnFinalizeChUniversal(txnId, block, outcome))
     txnPrintReport(opType, txnId, outcome);
+}
+
+void rebuildBoardVisible() {
+  boardVisibleCount = 0;
+  for (uint8_t i = 0; i < boardQuestCount && boardVisibleCount < QUEST_CAT_MAX; i++) {
+    if (boardQuests[i].hidden && !canUseHiddenQuest())
+      continue;
+    if (!canUseStore() && !boardQuests[i].hidden)
+      continue;
+    boardVisibleIdx[boardVisibleCount++] = i;
+  }
+  if (boardSel >= boardVisibleCount)
+    boardSel = 0;
+}
+
+bool writeBoardTake(const char *qid, bool complete) {
+  if (!chipPresentOnChUniversal() || ch0TxnBusy())
+    return false;
+  uint8_t buf[QUEST_TAKE_SIZE];
+  const char *uid = playerAssignedUid[0] ? playerAssignedUid : "anon";
+  quest_take_pack(buf, qid, uid, complete ? QUEST_TAKE_COMPLETE : 0);
+  if (!eepromWriteBlockChUniversal(QUEST_TAKE_BASE, buf, QUEST_TAKE_SIZE))
+    return false;
+  boardTakePending = true;
+  boardTakeAtMs = millis();
+  return true;
+}
+
+void clearBoardState() {
+  boardQuestCount = 0;
+  boardVisibleCount = 0;
+  boardOverlay = false;
+  boardOverlayDismissed = false;
+  boardTakePending = false;
+  boardCatCrc = 0;
+  boardSel = 0;
+}
+
+void pollQuestBoard() {
+  if (playerZombie || playerDead) {
+    if (boardWasPresent)
+      clearBoardState();
+    boardWasPresent = false;
+    return;
+  }
+  if (!chipPresentOnChUniversal()) {
+    if (boardWasPresent)
+      clearBoardState();
+    boardWasPresent = false;
+    return;
+  }
+  boardWasPresent = true;
+
+  if (boardTakePending) {
+    uint8_t tq[QUEST_TAKE_SIZE];
+    bool tqGone = true;
+    if (eepromReadBlockChUniversal(QUEST_TAKE_BASE, tq, QUEST_TAKE_SIZE) &&
+        tq[0] == QUEST_TAKE_MAGIC0 && tq[1] == QUEST_TAKE_MAGIC1)
+      tqGone = false;
+    if (tqGone && !ch0TxnBusy()) {
+      if (millis() - boardTakeAtMs > 2500) {
+        boardTakePending = false;
+        setEvent("ДОСКА: ЗАНЯТО", C_ORANGE);
+        needFullRedraw = true;
+      }
+    }
+    if (ch0TxnBusy() || (millis() - boardTakeAtMs < 4000 && !tqGone)) {
+      /* wait for TXN */
+    } else if (tqGone) {
+      boardTakePending = false;
+    }
+  }
+
+  uint8_t hdr[QUEST_CAT_HDR_SIZE];
+  if (!eepromReadBlockChUniversal(QUEST_CAT_BASE, hdr, QUEST_CAT_HDR_SIZE))
+    return;
+  uint8_t n = 0;
+  uint16_t crc = 0;
+  if (!quest_cat_parse_hdr(hdr, &n, &crc)) {
+    if (boardQuestCount) {
+      boardQuestCount = 0;
+      boardVisibleCount = 0;
+      boardOverlay = false;
+      needFullRedraw = true;
+    }
+    return;
+  }
+  if (n > QUEST_CAT_MAX)
+    n = QUEST_CAT_MAX;
+  if (crc == boardCatCrc && n == boardQuestCount)
+    return;
+
+  uint8_t rec[QUEST_CAT_REC_SIZE];
+  uint8_t loaded = 0;
+  for (uint8_t i = 0; i < n; i++) {
+    if (!eepromReadBlockChUniversal(
+            QUEST_CAT_BASE + QUEST_CAT_HDR_SIZE + i * QUEST_CAT_REC_SIZE, rec,
+            QUEST_CAT_REC_SIZE))
+      return;
+    quest_cat_parse_rec(rec, &boardQuests[loaded]);
+    if (boardQuests[loaded].id[0])
+      loaded++;
+  }
+  boardQuestCount = loaded;
+  boardCatCrc = crc;
+  rebuildBoardVisible();
+  if (!boardOverlayDismissed && boardVisibleCount > 0 && !admitPending &&
+      !playerAgony)
+    boardOverlay = true;
+  needFullRedraw = true;
 }
 
 bool ch0TxnBusy() {
@@ -2127,6 +2266,18 @@ void loadState() {
     innateRes[i] = prefs.getInt(key, cfgBaseProt[i]);
   }
   lastProcessedTxnId = prefs.getUInt("last_txn", 0);
+  activeTaskCount = prefs.getUChar("atn", 0);
+  if (activeTaskCount > ACTIVE_TASKS_MAX)
+    activeTaskCount = ACTIVE_TASKS_MAX;
+  memset(activeTasks, 0, sizeof(activeTasks));
+  size_t atGot = prefs.getBytes("atb", activeTasks, sizeof(activeTasks));
+  if (atGot != sizeof(activeTasks))
+    activeTaskCount = 0;
+  for (uint8_t i = 0; i < activeTaskCount; i++) {
+    activeTasks[i].id[sizeof(activeTasks[i].id) - 1] = '\0';
+    activeTasks[i].title[sizeof(activeTasks[i].title) - 1] = '\0';
+    activeTasks[i].shortDesc[sizeof(activeTasks[i].shortDesc) - 1] = '\0';
+  }
   prefs.end();
 }
 
@@ -2168,6 +2319,8 @@ void saveState() {
   prefs.putString("pgroup", playerGroup);
   prefs.putUChar("mac_n", discoveredMacCount);
   prefs.putBytes("mac_b", discoveredMacs, discoveredMacCount * 6);
+  prefs.putUChar("atn", activeTaskCount);
+  prefs.putBytes("atb", activeTasks, sizeof(activeTasks));
   for (int i = 0; i < 8; i++) {
     char key[8];
     snprintf(key, sizeof(key), "res%d", i);
@@ -3080,15 +3233,48 @@ void drawPage4() {
   tft.drawFastHLine(8, 28, SCR_W - 16, C_BORDER);
   if (activeTaskCount == 0) {
     printRus(72, 80, "НЕТ АКТИВНЫХ", C_DGRAY);
-    printRus(24, 110, "Квест-чип CH0", C_DGRAY);
+    printRus(24, 110, "Подключите доску", C_DGRAY);
   } else {
     for (uint8_t i = 0; i < activeTaskCount && i < ACTIVE_TASKS_MAX; i++) {
-      int y = 44 + i * 24;
-      printRusStr(16, y, String(activeTasks[i].title), C_WHITE);
+      int y = 44 + i * 28;
+      uint16_t col = (i == questSel) ? C_WHITE : C_LGRAY;
+      if (i == questSel)
+        tft.fillRect(8, y - 2, SCR_W - 16, 24, C_DGRAY);
+      printRus(12, y, i == questSel ? ">" : " ", col);
+      printRusStr(28, y, String(activeTasks[i].title), col);
     }
-    printRus(16, 200, "ОК = описание", C_DGRAY);
+    if (boardQuestCount)
+      printRus(16, 188, "ОК = сдать на доске", C_YELLOW);
+    else
+      printRus(16, 188, "ОК = описание", C_DGRAY);
   }
   drawPageIndicator();
+}
+
+void drawBoardOverlay() {
+  tft.fillRect(12, 28, SCR_W - 24, 176, C_BLACK);
+  tft.drawRect(12, 28, SCR_W - 24, 176, C_YELLOW);
+  printRus(72, 36, "ДОСКА ЗАДАНИЙ", C_YELLOW);
+  if (boardVisibleCount == 0) {
+    printRus(64, 90, "НЕТ ЗАДАНИЙ", C_DGRAY);
+    printRus(40, 180, "ESC — закрыть", C_LGRAY);
+    return;
+  }
+  uint8_t start = 0;
+  if (boardSel >= 5)
+    start = (uint8_t)(boardSel - 4);
+  uint8_t shown = 0;
+  for (uint8_t i = start; i < boardVisibleCount && shown < 5; i++, shown++) {
+    int y = 58 + shown * 22;
+    QuestCatRec &q = boardQuests[boardVisibleIdx[i]];
+    uint16_t col = (i == boardSel) ? C_WHITE : C_LGRAY;
+    if (i == boardSel)
+      tft.fillRect(18, y - 1, SCR_W - 36, 20, C_DGRAY);
+    printRus(20, y, i == boardSel ? ">" : " ", col);
+    printRusStr(36, y, String(q.title), col);
+  }
+  printRus(20, 176, "ВНИЗ выбор  ОК взять", C_LGRAY);
+  printRus(20, 192, "ESC закрыть", C_DGRAY);
 }
 
 // ─── СТРАНИЦА 5: НАСТРОЙКИ (громкость) ───
@@ -3270,6 +3456,10 @@ void drawScreen() {
                 C_WHITE);
     printRus(48, 140, "ОК — да   ESC — нет", C_LGRAY);
   }
+
+  if (boardOverlay && !playerZombie && !playerDead && !admitPending &&
+      !chipConfirmPending)
+    drawBoardOverlay();
 }
 
 // =====================================================
@@ -3350,6 +3540,33 @@ void handleButtons() {
     return;
   }
 
+  if (boardOverlay && !playerZombie && !playerDead && !admitPending) {
+    if (btnPressed(0)) {
+      if (boardVisibleCount)
+        boardSel = (uint8_t)((boardSel + 1) % boardVisibleCount);
+      needFullRedraw = true;
+    }
+    btnPressed(1);
+    if (btnPressed(2)) {
+      if (boardTakePending) {
+        setEvent("ДОСКА: ЖДИТЕ", C_ORANGE);
+      } else if (boardVisibleCount) {
+        uint8_t qi = boardVisibleIdx[boardSel];
+        if (writeBoardTake(boardQuests[qi].id, false))
+          setEvent("ДОСКА: БЕРУ...", C_YELLOW);
+        else
+          setEvent("ДОСКА: ЗАНЯТО", C_ORANGE);
+      }
+      needFullRedraw = true;
+    }
+    if (btnPressed(3)) {
+      boardOverlay = false;
+      boardOverlayDismissed = true;
+      needFullRedraw = true;
+    }
+    return;
+  }
+
   /* Зомби и агония: только двойной OK = сдаться. */
   if (playerZombie || inAgony()) {
     btnPressed(0);
@@ -3406,6 +3623,19 @@ void handleButtons() {
           doSurrender();
           surrenderStep = 0;
           menuSub = -1;
+        }
+      } else if (menuSub == 1) {
+        if (activeTaskCount && boardQuestCount && !boardTakePending) {
+          if (questSel >= activeTaskCount)
+            questSel = 0;
+          if (writeBoardTake(activeTasks[questSel].id, true))
+            setEvent("ДОСКА: СДАЮ...", C_YELLOW);
+          else
+            setEvent("ДОСКА: ЗАНЯТО", C_ORANGE);
+        } else if (activeTaskCount) {
+          if (questSel >= activeTaskCount)
+            questSel = 0;
+          setEvent(activeTasks[questSel].title, C_WHITE);
         }
       } else if (menuSub == 4)
         adjustVolume(2);
@@ -3731,6 +3961,7 @@ void loop() {
   if (millis() - lastTxnPollMs >= TXN_POLL_MS) {
     lastTxnPollMs = millis();
     pollEepromTransaction();
+    pollQuestBoard();
     pollChips();
   }
 

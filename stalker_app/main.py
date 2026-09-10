@@ -292,7 +292,8 @@ class StalkerApp(tk.Tk):
         self._highlight_nav("quests")
         self._clear_container()
         QuestsFrame(
-            self.container, self.db, self.event_id, on_back=self.show_dashboard,
+            self.container, self.db, self.event_id,
+            serial=self.serial, on_back=self.show_dashboard,
         ).pack(fill="both", expand=True)
 
     def show_commands(self):

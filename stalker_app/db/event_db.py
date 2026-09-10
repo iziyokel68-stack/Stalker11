@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS quests (
     body         TEXT,
     reward_rub   INTEGER NOT NULL DEFAULT 0,
     hidden       INTEGER NOT NULL DEFAULT 0,
+    claim_mode   TEXT NOT NULL DEFAULT 'timeout',
+    timeout_min  INTEGER NOT NULL DEFAULT 120,
     created_at   REAL NOT NULL
 );
 
@@ -178,6 +180,8 @@ class Quest:
     reward_rub: int
     hidden: int
     created_at: float
+    claim_mode: str = "timeout"
+    timeout_min: int = 120
 
 
 @dataclass
@@ -190,6 +194,24 @@ class MapBeacon:
     y_pct: float
     note: Optional[str]
     device_id: Optional[str] = None
+
+
+def _row_to_quest(r) -> Quest:
+    keys = set(r.keys())
+    mode = r["claim_mode"] if "claim_mode" in keys and r["claim_mode"] else "timeout"
+    tmin = r["timeout_min"] if "timeout_min" in keys and r["timeout_min"] is not None else 120
+    return Quest(
+        quest_id=r["quest_id"],
+        event_id=r["event_id"],
+        code=r["code"],
+        title=r["title"],
+        body=r["body"],
+        reward_rub=r["reward_rub"],
+        hidden=r["hidden"],
+        created_at=r["created_at"],
+        claim_mode=mode,
+        timeout_min=int(tmin),
+    )
 
 
 def _row_to_player(r) -> Player:
@@ -235,6 +257,15 @@ class EventDB:
         bcols = {r[1] for r in self.conn.execute("PRAGMA table_info(map_beacons)")}
         if bcols and "device_id" not in bcols:
             self.conn.execute("ALTER TABLE map_beacons ADD COLUMN device_id TEXT")
+        qcols = {r[1] for r in self.conn.execute("PRAGMA table_info(quests)")}
+        if qcols and "claim_mode" not in qcols:
+            self.conn.execute(
+                "ALTER TABLE quests ADD COLUMN claim_mode TEXT DEFAULT 'timeout'"
+            )
+        if qcols and "timeout_min" not in qcols:
+            self.conn.execute(
+                "ALTER TABLE quests ADD COLUMN timeout_min INTEGER DEFAULT 120"
+            )
 
     def close(self):
         self.conn.close()
@@ -504,18 +535,40 @@ class EventDB:
     # --- quests ------------------------------------------------------------
 
     def add_quest(self, event_id: str, code: str, title: str, body: str = "",
-                  reward_rub: int = 0, hidden: bool = False) -> int:
+                  reward_rub: int = 0, hidden: bool = False,
+                  claim_mode: str = "timeout", timeout_min: int = 120) -> int:
+        mode = (claim_mode or "timeout").strip().lower()
+        if mode not in ("timeout", "oneshot", "shared"):
+            mode = "timeout"
+        tmin = int(timeout_min or 120)
+        if tmin < 0:
+            tmin = 120
         cur = self.conn.execute(
             "INSERT INTO quests(event_id, code, title, body, reward_rub, hidden, "
-            "created_at) VALUES (?,?,?,?,?,?,?)",
+            "claim_mode, timeout_min, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (event_id, code.strip(), title.strip(), body.strip(),
-             int(reward_rub), 1 if hidden else 0, time.time()),
+             int(reward_rub), 1 if hidden else 0, mode, tmin, time.time()),
         )
         self.conn.commit()
         return cur.lastrowid
 
     def update_quest(self, quest_id: int, **fields):
-        allowed = {"code", "title", "body", "reward_rub", "hidden"}
+        allowed = {"code", "title", "body", "reward_rub", "hidden", "claim_mode",
+                   "timeout_min"}
+        fields = dict(fields)
+        if "claim_mode" in fields:
+            mode = (fields["claim_mode"] or "timeout").strip().lower()
+            if mode not in ("timeout", "oneshot", "shared"):
+                mode = "timeout"
+            fields["claim_mode"] = mode
+        if "timeout_min" in fields:
+            try:
+                tmin = int(fields["timeout_min"] or 120)
+            except (TypeError, ValueError):
+                tmin = 120
+            if tmin <= 0:
+                tmin = 120
+            fields["timeout_min"] = tmin
         cols = [k for k in fields if k in allowed]
         if not cols:
             return
@@ -535,13 +588,13 @@ class EventDB:
             "SELECT * FROM quests WHERE event_id=? ORDER BY hidden, code, quest_id",
             (event_id,),
         ).fetchall()
-        return [Quest(**{k: r[k] for k in r.keys()}) for r in rows]
+        return [_row_to_quest(r) for r in rows]
 
     def get_quest(self, quest_id: int):
         r = self.conn.execute(
             "SELECT * FROM quests WHERE quest_id=?", (quest_id,)
         ).fetchone()
-        return Quest(**{k: r[k] for k in r.keys()}) if r else None
+        return _row_to_quest(r) if r else None
 
     # --- map ---------------------------------------------------------------
 
@@ -666,10 +719,11 @@ class EventDB:
         quests = self.list_quests(event_id)
         with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
-            w.writerow(["code", "title", "body", "reward_rub", "hidden"])
+            w.writerow(["code", "title", "body", "reward_rub", "hidden",
+                        "claim_mode", "timeout_min"])
             for q in quests:
                 w.writerow([q.code, q.title, q.body or "", q.reward_rub,
-                            "1" if q.hidden else "0"])
+                            "1" if q.hidden else "0", q.claim_mode, q.timeout_min])
 
     def export_db_copy(self, dest_path: str):
         self.conn.commit()
