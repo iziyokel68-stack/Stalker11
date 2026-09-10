@@ -241,3 +241,27 @@ class SerialSession:
         if len(cards) > QUEST_CAT_MAX:
             extra = f" (первые {QUEST_CAT_MAX} из {len(cards)})"
         return True, (resp or "OK") + extra
+
+    def configure_terminal(self, role: str, limit_purchase: int = 0,
+                           limit_withdraw: int = 0, limit_deposit: int = 0):
+        """Роль + лимиты кассы/банкомата. Прошивку .ino не трогает."""
+        err = self._need_usb()
+        if err:
+            return False, err
+        if self.link.dev_type != "TERMINAL":
+            return False, (
+                f"Подключите универсальный терминал по USB "
+                f"(сейчас {self.link.dev_type})."
+            )
+        ok, msg = self.set_terminal_role(role)
+        if not ok:
+            return False, msg or "Не удалось выставить роль"
+        ok, resp = self.link.terminal_cfg_set(
+            limit_purchase=limit_purchase,
+            limit_withdraw=limit_withdraw,
+            limit_deposit=limit_deposit,
+            role=role,
+        )
+        if not ok:
+            return False, resp or self.link.last_error or "Нет TERMINAL_CFG — обновите .ino терминала"
+        return True, resp

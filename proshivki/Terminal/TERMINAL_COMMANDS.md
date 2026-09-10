@@ -40,6 +40,19 @@
 | `TERMINAL_ROLE:STORE` | `OK:TERMINAL_ROLE:STORE,op_default=0,name=Касса` | Установить роль. Имя регистронезависимо. |
 | `TERMINAL_ROLE:???` | `ERROR:BAD_ROLE` | Неизвестная роль. |
 
+### Политика лимитов (NVS, без перезаливки .ino)
+
+0 = без лимита. Проверяется на `TXN_START` до записи EEPROM.
+
+| Команда | Ответ | Описание |
+|---------|-------|----------|
+| `TERMINAL_CFG` | `TERMINAL_CFG:role=STORE,limit_purchase=0,limit_withdraw=0,limit_deposit=0` | Текущие лимиты. |
+| `TERMINAL_CFG:limit_purchase=5000,limit_withdraw=2000,limit_deposit=10000` | `OK:TERMINAL_CFG:...` | Записать. Можно добавить `role=ATM`. |
+| `CONFIG_READ` | `CONFIG:role=STORE,limit_purchase=…` | То же для кнопки «Считать». |
+| `CONFIG_WRITE:role=STORE,limit_purchase=5000,…` | `OK:WRITTEN` | То же, что TERMINAL_CFG + опц. роль. |
+
+`TXN_START` сверх лимита: `ERROR:LIMIT:max=N` (касса — `limit_purchase`; снятие — `limit_withdraw`; вклад `flags=2` — `limit_deposit`).
+
 ---
 
 ## TXN-команды (EEPROM-транзакции)

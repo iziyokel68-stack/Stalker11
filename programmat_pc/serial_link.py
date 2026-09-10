@@ -389,6 +389,38 @@ class SerialLink:
             return role
         return self.terminal_role
 
+    def terminal_cfg_set(self, limit_purchase=0, limit_withdraw=0, limit_deposit=0,
+                         role=None):
+        parts = [
+            f"limit_purchase={max(0, int(limit_purchase or 0))}",
+            f"limit_withdraw={max(0, int(limit_withdraw or 0))}",
+            f"limit_deposit={max(0, int(limit_deposit or 0))}",
+        ]
+        if role:
+            parts.insert(0, "role=" + str(role).strip().upper())
+        return self.query_ok("TERMINAL_CFG:" + ",".join(parts), timeout=3.0)
+
+    def terminal_cfg_get(self):
+        resp = self.query("TERMINAL_CFG", timeout=2.0)
+        if resp and resp.startswith("OK:TERMINAL_CFG:"):
+            resp = resp[3:]
+        if not resp or not resp.startswith("TERMINAL_CFG:"):
+            return None
+        result = {}
+        for token in resp.split(":", 1)[1].split(","):
+            if "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            k, v = k.strip(), v.strip()
+            if k == "role":
+                result[k] = v
+            else:
+                try:
+                    result[k] = int(v)
+                except ValueError:
+                    result[k] = v
+        return result
+
     def flash_quest_catalog(self, add_cmds, timeout_commit=25.0):
         """Прошить каталог доски: CLEAR + QUEST_ADD* + COMMIT."""
         ok, resp = self.query_ok("QUEST_CATALOG_CLEAR")

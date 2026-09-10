@@ -26,6 +26,9 @@
  *   STALKER_WHO              → STALKER:TERMINAL:v1,role=STORE,op_default=0,name=Касса
  *   TERMINAL_ROLE            → TERMINAL_ROLE:STORE,op_default=0,name=Касса
  *   TERMINAL_ROLE:ATM        → OK:TERMINAL_ROLE:ATM
+ *   TERMINAL_CFG             → TERMINAL_CFG:role=STORE,limit_purchase=0,...
+ *   TERMINAL_CFG:limit_purchase=5000,limit_withdraw=2000,limit_deposit=10000
+ *   CONFIG_READ / CONFIG_WRITE:role=...,limit_purchase=...  (то же, для программатора)
  *   PING                     → PONG
  *   I2C_SCAN / EEPROM_PING
  *   TXN_START:amount=500,item=1[,op=N]  — без op используется op роли
@@ -77,6 +80,9 @@
 #define NVS_NS "stalker"
 #define NVS_KEY_ROLE "terminal_role"
 #define NVS_KEY_CLAIMS "qclm"
+#define NVS_KEY_LIM_BUY "lim_buy"
+#define NVS_KEY_LIM_WD "lim_wd"
+#define NVS_KEY_LIM_DEP "lim_dep"
 #define QUEST_POLL_MS 200
 #define CLAIM_REC_SIZE 28
 
@@ -103,6 +109,9 @@ static const uint8_t ROLE_DEFAULT_OP[] = {
 
 Preferences prefs;
 TerminalRole currentRole = ROLE_STORE;
+int32_t limitPurchase = 0;  // 0 = без лимита
+int32_t limitWithdraw = 0;
+int32_t limitDeposit = 0;
 
 #if USE_TCA_MUX
 #define CASSETTE_CHANNEL MUX_CH_UNIVERSAL
@@ -226,6 +235,33 @@ int roleFromName(const String &name) {
         if (u == ROLE_NAMES[i]) return (int)i;
     }
     return -1;
+}
+
+String terminalCfgLine() {
+    String s = "TERMINAL_CFG:role=" + String(ROLE_NAMES[(uint8_t)currentRole]);
+    s += ",limit_purchase=" + String((long)limitPurchase);
+    s += ",limit_withdraw=" + String((long)limitWithdraw);
+    s += ",limit_deposit=" + String((long)limitDeposit);
+    return s;
+}
+
+void loadTerminalLimits() {
+    prefs.begin(NVS_NS, true);
+    limitPurchase = prefs.getInt(NVS_KEY_LIM_BUY, 0);
+    limitWithdraw = prefs.getInt(NVS_KEY_LIM_WD, 0);
+    limitDeposit = prefs.getInt(NVS_KEY_LIM_DEP, 0);
+    prefs.end();
+    if (limitPurchase < 0) limitPurchase = 0;
+    if (limitWithdraw < 0) limitWithdraw = 0;
+    if (limitDeposit < 0) limitDeposit = 0;
+}
+
+void saveTerminalLimits() {
+    prefs.begin(NVS_NS, false);
+    prefs.putInt(NVS_KEY_LIM_BUY, (int)limitPurchase);
+    prefs.putInt(NVS_KEY_LIM_WD, (int)limitWithdraw);
+    prefs.putInt(NVS_KEY_LIM_DEP, (int)limitDeposit);
+    prefs.end();
 }
 
 void loadTerminalRole() {
@@ -826,6 +862,60 @@ void cmdTerminalRole(const String &args) {
     Serial.println("OK:" + terminalRoleLine());
 }
 
+void applyTerminalCfgKeys(const String &args) {
+    int v = 0;
+    String role;
+    if (parseKeyStr(args, "role", role) && role.length()) {
+        int idx = roleFromName(role);
+        if (idx >= 0)
+            saveTerminalRole((TerminalRole)idx);
+    }
+    if (parseKeyVal(args, "limit_purchase", v))
+        limitPurchase = v < 0 ? 0 : v;
+    if (parseKeyVal(args, "limit_withdraw", v))
+        limitWithdraw = v < 0 ? 0 : v;
+    if (parseKeyVal(args, "limit_deposit", v))
+        limitDeposit = v < 0 ? 0 : v;
+    saveTerminalLimits();
+}
+
+void cmdTerminalCfg(const String &args) {
+    if (args.length() == 0) {
+        Serial.println(terminalCfgLine());
+        return;
+    }
+    applyTerminalCfgKeys(args);
+    Serial.println("OK:" + terminalCfgLine());
+}
+
+void cmdConfigRead() {
+    String s = "CONFIG:role=" + String(ROLE_NAMES[(uint8_t)currentRole]);
+    s += ",limit_purchase=" + String((long)limitPurchase);
+    s += ",limit_withdraw=" + String((long)limitWithdraw);
+    s += ",limit_deposit=" + String((long)limitDeposit);
+    Serial.println(s);
+}
+
+bool amountOverLimit(int op, int amount, int flags, int32_t &maxOut) {
+    maxOut = 0;
+    if (op == TXN_OP_PURCHASE) {
+        if (limitPurchase > 0 && amount > limitPurchase) {
+            maxOut = limitPurchase;
+            return true;
+        }
+        return false;
+    }
+    if (op == TXN_OP_BANK || op == TXN_OP_ATM) {
+        bool dep = (flags & TXN_FLAG_BANK_DEPOSIT) != 0;
+        int32_t lim = dep ? limitDeposit : limitWithdraw;
+        if (lim > 0 && amount > lim) {
+            maxOut = lim;
+            return true;
+        }
+    }
+    return false;
+}
+
 void cmdTxnStart(const String &args) {
     if (!eepromPresent()) {
         Serial.println("ERROR:EEPROM_NOT_FOUND");
@@ -850,6 +940,12 @@ void cmdTxnStart(const String &args) {
     }
     if (txn_validate_block(block) && txn_get_state(block) != TXN_STATE_IDLE) {
         Serial.println("ERROR:TXN_BUSY:" + txnStatusLine(block));
+        return;
+    }
+
+    int32_t limMax = 0;
+    if (amountOverLimit(op, amount, flags, limMax)) {
+        Serial.printf("ERROR:LIMIT:max=%ld\n", (long)limMax);
         return;
     }
 
@@ -955,6 +1051,14 @@ void processCommand(const String &cmd) {
     } else if (cmd == "TERMINAL_ROLE" || cmd.startsWith("TERMINAL_ROLE:")) {
         String args = (cmd.length() > 14) ? cmd.substring(14) : "";
         cmdTerminalRole(args);
+    } else if (cmd == "TERMINAL_CFG" || cmd.startsWith("TERMINAL_CFG:")) {
+        String args = (cmd.length() > 13) ? cmd.substring(13) : "";
+        cmdTerminalCfg(args);
+    } else if (cmd == "CONFIG_READ") {
+        cmdConfigRead();
+    } else if (cmd.startsWith("CONFIG_WRITE:")) {
+        applyTerminalCfgKeys(cmd.substring(13));
+        Serial.println("OK:WRITTEN");
     } else if (cmd.startsWith("TXN_START:")) {
         cmdTxnStart(cmd.substring(10));
     } else if (cmd == "TXN_STATUS") {
@@ -1001,10 +1105,11 @@ void setup() {
     Serial.begin(115200);
     delay(300);
     loadTerminalRole();
+    loadTerminalLimits();
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
 
-    Serial.println("=== STALKER Terminal v1.1 ===");
+    Serial.println("=== STALKER Terminal v1.2 ===");
     Serial.println(terminalRoleLine());
     Serial.println(stalkerWhoLine());  // handshake для программатора PC (до READY)
     Serial.printf("Board: %s | I2C SDA=GPIO%d SCL=GPIO%d @100kHz\n",
@@ -1023,6 +1128,7 @@ void setup() {
     loadQuestBoard();
     if (currentRole == ROLE_QUEST)
         Serial.printf("QUEST_CATALOG:count=%u\n", (unsigned)questCardCount);
+    Serial.println(terminalCfgLine());
 #if TERMINAL_TEST_MODE
     Serial.println("TEST_MODE: ON — use I2C_SCAN / EEPROM_PING");
 #endif

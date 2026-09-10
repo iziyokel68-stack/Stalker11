@@ -44,9 +44,11 @@ TARGET_MODES = ["ОДИН ИГРОК", "ПОДРЫВ", "ОБЛАКО"]
 
 
 class ProgrammerFrame(ttk.Frame):
-    def __init__(self, master, serial=None, on_back=None):
+    def __init__(self, master, serial=None, db=None, event_id=None, on_back=None):
         super().__init__(master)
         self.serial = serial
+        self.db = db
+        self.event_id = event_id
         self.on_back = on_back
         self.anom_bits = [tk.BooleanVar(value=(i == 0)) for i in range(7)]
         self.sz_prot = [tk.StringVar(value="0") for _ in range(8)]
@@ -58,8 +60,9 @@ class ProgrammerFrame(ttk.Frame):
         module_header(self, "Программатор", self.on_back)
         ttk.Label(
             self,
-            text="USB к CHIP_BOX или полевому устройству на столе. "
-                 "Игровой ПДА — чип EEPROM или LoRa по № регистрации.",
+            text="Arduino / .ino заливается один раз на базе. "
+                 "Дальше подключите устройство USB и нажмите «Записать в устройство» — "
+                 "роль, лимиты, задания, аномалия, убежище, чип.",
             style="Dim.TLabel",
             wraplength=820,
         ).pack(anchor="w", padx=12, pady=(0, 6))
@@ -87,9 +90,9 @@ class ProgrammerFrame(ttk.Frame):
 
         bar = ttk.Frame(self)
         bar.pack(fill="x", padx=12, pady=(0, 10))
-        ttk.Button(bar, text="Прошить", style="Accent.TButton",
+        ttk.Button(bar, text="Записать в устройство", style="Accent.TButton",
                    command=self._flash).pack(side="left")
-        ttk.Button(bar, text="Считать CONFIG_READ",
+        ttk.Button(bar, text="Считать с устройства",
                    command=self._read).pack(side="left", padx=8)
         self.lbl_status = ttk.Label(bar, text="", style="Dim.TLabel")
         self.lbl_status.pack(side="left", padx=12)
@@ -409,12 +412,39 @@ class ProgrammerFrame(ttk.Frame):
 
     def _build_term(self):
         f = self.tab_term
-        ttk.Label(f, text="Роль универсального терминала (NVS на устройстве).",
-                  style="Dim.TLabel").pack(anchor="w", padx=8, pady=12)
-        self.cmb_role = ttk.Combobox(f, state="readonly", width=16,
+        ttk.Label(
+            f,
+            text="Один корпус ESP. Роль и лимиты пишутся в память устройства (NVS), "
+                 "прошивку заново заливать не нужно. 0 = без лимита.",
+            style="Dim.TLabel", wraplength=760,
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+
+        r = ttk.Frame(f)
+        r.pack(fill="x", padx=8, pady=4)
+        ttk.Label(r, text="Роль", width=22).pack(side="left")
+        self.cmb_role = ttk.Combobox(r, state="readonly", width=16,
                                      values=TERMINAL_ROLES)
         self.cmb_role.current(0)
-        self.cmb_role.pack(anchor="w", padx=8)
+        self.cmb_role.pack(side="left")
+
+        self.var_lim_buy = tk.StringVar(value="0")
+        self.var_lim_wd = tk.StringVar(value="0")
+        self.var_lim_dep = tk.StringVar(value="0")
+        self._row(f, "Касса: макс. покупка, RUB", self.var_lim_buy)
+        self._row(f, "Банкомат: макс. снятие, RUB", self.var_lim_wd)
+        self._row(f, "Банкомат: макс. вклад, RUB", self.var_lim_dep)
+
+        self.var_flash_quests = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            f,
+            text="Если роль QUEST — записать задания с доски этого события",
+            variable=self.var_flash_quests,
+        ).pack(anchor="w", padx=8, pady=(10, 4))
+        ttk.Label(
+            f,
+            text="Задания редактируются в меню «Задания». Здесь только отправка на доску.",
+            style="Dim.TLabel", wraplength=760,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
     def _i(self, var, default=0):
         try:
@@ -480,7 +510,26 @@ class ProgrammerFrame(ttk.Frame):
         tab = self.nb.index(self.nb.select())
         if tab == 4:
             role = self.cmb_role.get() or "STORE"
-            ok, resp = self.serial.set_terminal_role(role)
+            ok, resp = self.serial.configure_terminal(
+                role,
+                limit_purchase=self._i(self.var_lim_buy, 0),
+                limit_withdraw=self._i(self.var_lim_wd, 0),
+                limit_deposit=self._i(self.var_lim_dep, 0),
+            )
+            if ok and role == "QUEST" and self.var_flash_quests.get():
+                if not self.db or not self.event_id:
+                    self._done(True, (resp or "OK") + "  (задания: нет события)")
+                    return
+                quests = self.db.list_quests(self.event_id)
+                if not quests:
+                    self._done(True, (resp or "OK") + "  (каталог заданий пуст)")
+                    return
+                qok, qmsg = self.serial.flash_quest_board(quests)
+                if not qok:
+                    self._done(False, "Роль/лимиты записаны, задания нет: " + str(qmsg))
+                    return
+                self._done(True, f"{resp}\nЗадания: {qmsg}")
+                return
             self._done(ok, resp)
             return
         kind = ("CHIP", "ANOMALY", "SAFE_ZONE", "PDA")[tab]
@@ -496,7 +545,18 @@ class ProgrammerFrame(ttk.Frame):
         if snap is None:
             messagebox.showerror("Программатор", str(msg), parent=self)
             return
-        messagebox.showinfo("CONFIG_READ", str(snap), parent=self)
+        if isinstance(snap, dict):
+            role = str(snap.get("role") or "").upper()
+            if role in TERMINAL_ROLES:
+                self.cmb_role.set(role)
+                self.nb.select(self.tab_term)
+            if "limit_purchase" in snap:
+                self.var_lim_buy.set(str(snap.get("limit_purchase") or 0))
+            if "limit_withdraw" in snap:
+                self.var_lim_wd.set(str(snap.get("limit_withdraw") or 0))
+            if "limit_deposit" in snap:
+                self.var_lim_dep.set(str(snap.get("limit_deposit") or 0))
+        messagebox.showinfo("Считано", str(snap), parent=self)
 
     def _done(self, ok, resp):
         self.lbl_status.configure(text=("OK  " if ok else "Ошибка  ") + str(resp or ""))

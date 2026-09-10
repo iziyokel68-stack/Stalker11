@@ -319,7 +319,9 @@ class StalkerApp(tk.Tk):
         self._highlight_nav("programmer")
         self._clear_container()
         ProgrammerFrame(
-            self.container, serial=self.serial, on_back=self.show_dashboard,
+            self.container, serial=self.serial,
+            db=self.db, event_id=self.event_id,
+            on_back=self.show_dashboard,
         ).pack(fill="both", expand=True)
 
     def _poll_ports(self):

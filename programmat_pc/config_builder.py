@@ -96,3 +96,15 @@ def build_pda_config(d: Mapping) -> str:
         f"xp={_i(d, 'pda_xp')},"
         f"{prot_s}"
     )
+
+
+def build_terminal_cfg(d: Mapping) -> str:
+    """USB-конфиг терминала после одноразовой заливки .ino. 0 = без лимита."""
+    role = (d.get("role") or "").strip().upper()
+    parts = []
+    if role:
+        parts.append(f"role={role}")
+    parts.append(f"limit_purchase={max(0, _i(d, 'limit_purchase'))}")
+    parts.append(f"limit_withdraw={max(0, _i(d, 'limit_withdraw'))}")
+    parts.append(f"limit_deposit={max(0, _i(d, 'limit_deposit'))}")
+    return "TERMINAL_CFG:" + ",".join(parts)

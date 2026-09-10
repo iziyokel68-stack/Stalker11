@@ -94,6 +94,25 @@ class SerialCmdTests(unittest.TestCase):
     def test_device_map_has_pda(self):
         self.assertEqual(DEVICE_TYPE_MAP["PDA"], 3)
         self.assertEqual(DEVICE_TYPE_MAP["CHIP_BOX"], 0)
+        self.assertEqual(DEVICE_TYPE_MAP["TERMINAL"], 4)
+
+    def test_terminal_cfg_builder(self):
+        from config_builder import build_terminal_cfg
+        from serial_link import SerialLink
+        cmd = build_terminal_cfg({
+            "role": "ATM",
+            "limit_purchase": 5000,
+            "limit_withdraw": 2000,
+            "limit_deposit": 10000,
+        })
+        self.assertTrue(cmd.startswith("TERMINAL_CFG:"))
+        self.assertIn("role=ATM", cmd)
+        self.assertIn("limit_purchase=5000", cmd)
+        self.assertIn("limit_withdraw=2000", cmd)
+        self.assertIn("limit_deposit=10000", cmd)
+        self.assertIn("limit_purchase=0", build_terminal_cfg({"limit_purchase": -3}))
+        self.assertTrue(hasattr(SerialLink, "terminal_cfg_set"))
+        self.assertTrue(hasattr(SerialLink, "flash_quest_catalog"))
 
 
 if __name__ == "__main__":
