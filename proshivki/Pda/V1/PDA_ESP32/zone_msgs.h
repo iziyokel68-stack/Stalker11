@@ -12,6 +12,7 @@
 #define MSG_ENTRY_OK     24
 
 #define ZONE_MAX_SLOTS      8
+/* BU03 AT: ID обычно 0–10, TWR по одному. ЗЗ на толпу — вход UWB, дальше ESP-NOW. */
 #define ZONE_HELLO_MS       1000
 #define ZONE_SLOT_TIMEOUT_MS 8000
 #define BU03_CH_POLY        1

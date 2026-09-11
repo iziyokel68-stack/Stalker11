@@ -498,6 +498,7 @@ void loopAnomaly() {
 
 void loopSafeZone() {
     uint32_t now = millis();
+    /* Хил/beacon broadcast: толпа внутри фильтруется на ПДА (UWB только вход). */
     if (cfgSzHpFrq > 0 && (now - lastHealMs >= (uint32_t)cfgSzHpFrq * 1000UL)) {
         lastHealMs = now;
         sendPacket(EMITTER_BASE, MSG_SAFE_ZONE, cfgSzHp, cfgSzRad, 0);

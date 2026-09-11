@@ -123,10 +123,10 @@ class SerialCmdTests(unittest.TestCase):
         self.assertTrue(hasattr(SerialLink, "flash_quest_catalog"))
 
     def test_lora_devices_are_s3_radios(self):
+        self.assertIn("CHIP_BOX", LORA_DEVICES)
         self.assertIn("PDA", LORA_DEVICES)
         self.assertIn("ANOMALY", LORA_DEVICES)
         self.assertIn("SAFE_ZONE", LORA_DEVICES)
-        self.assertNotIn("CHIP_BOX", LORA_DEVICES)
         self.assertNotIn("TERMINAL", LORA_DEVICES)
 
 

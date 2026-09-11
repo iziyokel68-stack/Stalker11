@@ -2729,6 +2729,7 @@ bool isInSafeZone() {
     return false;
   if (!bu03Present)
     return true;
+  /* После входа по метрам — защёлка, не непрерывный UWB на всю толпу. */
   return uwbInShelter;
 }
 
@@ -4120,20 +4121,18 @@ void loop() {
     wantShelterUwb = false;
     uwbInShelter = false;
   }
-  if (wantShelterUwb && zoneSlot < 0 && bu03Link != BU03_OFF &&
-      bu03Link != BU03_NO_LINK) {
+  /* UWB только на входе: BU03 не тянет 30 якорей с одним ID.
+     Внутри зоны держимся по ESP-NOW beacon, якорь id=0 отпускаем. */
+  if (wantShelterUwb && zoneSlot < 0 && !uwbInShelter &&
+      bu03Link != BU03_OFF && bu03Link != BU03_NO_LINK) {
     if (millis() - lastShelterUwbSetMs > 20000UL) {
       lastShelterUwbSetMs = millis();
       bu03SetCfg(0, 1);
     }
     if (bu03DistM >= 0.0f && bu03DistM <= (float)szRadiusM) {
       uwbInShelter = true;
-      if (millis() - lastEntryOkMs >= 2000UL) {
-        lastEntryOkMs = millis();
-        sendEspNowPkt(shelterMac, EMITTER_PLAYER, MSG_ENTRY_OK, 0, 0, 0);
-      }
-    } else {
-      uwbInShelter = false;
+      lastEntryOkMs = millis();
+      sendEspNowPkt(shelterMac, EMITTER_PLAYER, MSG_ENTRY_OK, 0, 0, 0);
     }
   }
 

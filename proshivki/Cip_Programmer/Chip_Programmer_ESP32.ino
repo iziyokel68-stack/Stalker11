@@ -1,24 +1,23 @@
 /**
- * S.T.A.L.K.E.R. — Программатор чипов (Chip_Programmer_ESP32) v1.0
+ * S.T.A.L.K.E.R. — Стол мастера (CHIP_BOX) v1.1
  *
- * Плата: ESP32-C3 SuperMini (или любой ESP32 с I2C)
- * EEPROM: AT24C04 / AT24C08 / AT24C32 (любой I2C EEPROM на адресе 0x50)
+ * Один стационарный ESP на USB ноутбука: пульт LoRa + программатор чипов +
+ * регистрация / снимок в конце игры (EEPROM + TXN). Программа — stalker_app.
  *
- * Подключение EEPROM-чипа к ESP32-C3:
- *   EEPROM VCC  → 3.3V
- *   EEPROM GND  → GND
- *   EEPROM SDA  → GPIO 5
- *   EEPROM SCL  → GPIO 6
- *   EEPROM WP   → GND (разрешить запись)
- *   EEPROM A0,A1,A2 → GND (адрес 0x50)
+ * Плата: ESP32-S3 (рекомендуется) или ESP32-C3 SuperMini.
+ * EEPROM: AT24C04 / AT24C08 / AT24C32 (I2C 0x50), SDA=GPIO5 SCL=GPIO6.
+ *   WP→GND, A0/A1/A2→GND.
+ *
+ * LoRa Ra-01: S3 CS39 DIO0=41 SCK13 MISO40 MOSI14 (как ПДА/поле).
+ *             C3 CS10 DIO0=3 SCK4 MISO2 MOSI7.
  *
  * Протокол Serial (115200 бод):
- *   PC  → "STALKER_WHO"      → "STALKER:CHIP_BOX:v1"
+ *   PC  → "STALKER_WHO"      → "STALKER:CHIP_BOX:v2"
  *   PC  → "CONFIG_WRITE:..."  → пишет в EEPROM, отвечает "OK:WRITTEN:CRC=XXXX"
  *   PC  → "CONFIG_READ"       → читает EEPROM, отвечает "CONFIG:..."
  *   PC  → "VERIFY"            → читает и считает CRC, отвечает "OK:CRC=XXXX" или "ERROR:CRC"
  *   PC  → "PING"              → "PONG"
- *   PC  → "LORA_TX:..."       → "ERROR:NO_LORA" (C3 без Ra-01; радио — ПДА или поле)
+ *   PC  → "LORA_TX:..."       → OK в эфир (нет модуля → ERROR:NO_LORA)
  *
  * Формат CONFIG_WRITE:
  *   type=0,sub=0,uses=1,p0=50,...,name=Иван
@@ -41,6 +40,7 @@
  */
 
 #include <Wire.h>
+#include <SPI.h>
 #include <string.h>
 #include "eeprom_protocol.h"
 
@@ -49,6 +49,39 @@
 // ─────────────────────────────────────────────────────
 #define I2C_SDA   5
 #define I2C_SCL   6
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#define LORA_SCK  13
+#define LORA_MISO 40
+#define LORA_MOSI 14
+#define LORA_CS   39
+#define LORA_DIO0 41
+#define HAS_LORA  1
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+#define LORA_SCK  4
+#define LORA_MISO 2
+#define LORA_MOSI 7
+#define LORA_CS   10
+#define LORA_DIO0 3
+#define HAS_LORA  1
+#else
+#define HAS_LORA  0
+#endif
+
+#if HAS_LORA
+#pragma pack(push, 1)
+struct Packet {
+    uint8_t  emitter;
+    uint8_t  msg_type;
+    int16_t  val1;
+    int16_t  val2;
+    int16_t  val3;
+};
+#pragma pack(pop)
+#include "lora_link.h"
+#endif
+
+bool loraOk = false;
 
 // ─────────────────────────────────────────────────────
 //  EEPROM ПАРАМЕТРЫ
@@ -251,13 +284,24 @@ String serialBuf = "";
 
 void processCommand(const String& cmd) {
     if (cmd == "STALKER_WHO") {
-        Serial.println("STALKER:CHIP_BOX:v1");
+        Serial.println("STALKER:CHIP_BOX:v2");
     }
     else if (cmd == "PING") {
         Serial.println("PONG");
     }
     else if (cmd.startsWith("LORA_TX:")) {
+#if HAS_LORA
+        if (!loraOk) {
+            Serial.println("ERROR:NO_LORA");
+            return;
+        }
+        if (stalkerHandleLoraTxLine(cmd, 0))
+            Serial.println("OK");
+        else
+            Serial.println("ERROR:BAD_LORA");
+#else
         Serial.println("ERROR:NO_LORA");
+#endif
     }
     else if (cmd.startsWith("CONFIG_WRITE:")) {
         String cfg = cmd.substring(13);
@@ -439,15 +483,29 @@ void setup() {
     Wire.beginTransmission(EEPROM_ADDR);
     bool eepromFound = (Wire.endTransmission() == 0);
 
-    Serial.println("=== STALKER Chip Programmer v1.0 ===");
+    Serial.println("=== STALKER Master desk CHIP_BOX v1.1 ===");
     if (eepromFound) {
         Serial.println("EEPROM: FOUND at 0x50");
     } else {
         Serial.println("EEPROM: NOT FOUND! Проверь подключение SDA/SCL/VCC/GND");
     }
+#if HAS_LORA
+    loraOk = stalkerLoraBegin();
+    Serial.println(loraOk ? "LoRa OK (пульт USB LORA_TX)" : "LoRa FAIL — нет Ra-01?");
+#else
+    Serial.println("LoRa: плата без пинов Ra-01");
+#endif
+    Serial.println("STALKER:CHIP_BOX:v2");
     Serial.println("READY");
 }
 
 void loop() {
     handleSerial();
+#if HAS_LORA
+    if (loraOk) {
+        Packet dummy;
+        char text[4];
+        stalkerLoraPoll(0, &dummy, text, sizeof(text));
+    }
+#endif
 }
