@@ -18,7 +18,7 @@
  *   PC  → "CONFIG_READ"       → читает EEPROM, отвечает "CONFIG:..."
  *   PC  → "VERIFY"            → читает и считает CRC, отвечает "OK:CRC=XXXX" или "ERROR:CRC"
  *   PC  → "PING"              → "PONG"
- *   PC  → "LORA_TX:..."       → "ERROR:NO_LORA" (LoRa только на Мастер-Пульте)
+ *   PC  → "LORA_TX:..."       → "ERROR:NO_LORA" (C3 без Ra-01; радио — ПДА или поле)
  *
  * Формат CONFIG_WRITE:
  *   type=0,sub=0,uses=1,p0=50,...,name=Иван

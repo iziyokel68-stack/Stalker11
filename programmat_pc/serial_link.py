@@ -3,8 +3,9 @@ USB Serial к устройствам STALKER (ESP32).
 ================================================
 Handshake: PC → STALKER_WHO  /  ESP → STALKER:TYPE:ver[,role=…]
 
-USB — только к одному устройству на ПК мастера (CHIP_BOX, полевое устройство
-на столе, позже Мастер-Пульт / телефон). Взаимодействие с ПДА игрока:
+USB — только к одному устройству на ПК мастера (CHIP_BOX для чипов;
+ПДА или поле S3+Ra-01 — радио LoRa). Пульт мастера — программа stalker_app,
+не отдельный ESP с экраном. Взаимодействие с ПДА игрока:
   • LoRa по номеру регистрации (player_id, 0 = все) — LORA_TX:…
   • общий EEPROM-чип через CHIP_BOX — CONFIG_WRITE / TXN_*
 
@@ -511,7 +512,7 @@ def build_volume_cmd(level: int) -> str:
 
 def build_lora_cmd(player_id: int, msg: str, val1: int = 0, val2: int = 0,
                    text: str = "") -> str:
-    """Команда Мастер-Пульту: LoRa на номер регистрации (0 = все)."""
+    """USB → ESP с Ra-01: LoRa на номер регистрации (0 = все)."""
     cmd = f"LORA_TX:to={int(player_id)},msg={msg},v1={int(val1)},v2={int(val2)}"
     if text:
         cmd += ",text=" + text.replace("\n", " ").replace(",", " ")[:48]

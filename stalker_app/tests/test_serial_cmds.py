@@ -21,6 +21,7 @@ from serial_link import (
 )
 from config_builder import build_chip_config, build_config_for_device
 from shared.master_channel import (
+    LORA_DEVICES,
     id_choices,
     lora_emission,
     lora_radio,
@@ -90,6 +91,13 @@ class SerialCmdTests(unittest.TestCase):
         self.assertIn("name=Волк", s)
         pda = build_config_for_device("PDA", {"pda_mode": 0, "pda_func_flags": 255})
         self.assertTrue(pda.startswith("CONFIG:FUNC:"))
+        anom = build_config_for_device("ANOMALY", {"anom_radius": 7, "anom_uwb_id": 3})
+        self.assertIn("cat=0", anom)
+        self.assertIn("rad=7", anom)
+        self.assertIn("uwb_id=3", anom)
+        sz = build_config_for_device("SAFE_ZONE", {"sz_radius": 12, "sz_uwb_id": 2})
+        self.assertIn("cat=1", sz)
+        self.assertIn("uwb_id=2", sz)
 
     def test_device_map_has_pda(self):
         self.assertEqual(DEVICE_TYPE_MAP["PDA"], 3)
@@ -113,6 +121,13 @@ class SerialCmdTests(unittest.TestCase):
         self.assertIn("limit_purchase=0", build_terminal_cfg({"limit_purchase": -3}))
         self.assertTrue(hasattr(SerialLink, "terminal_cfg_set"))
         self.assertTrue(hasattr(SerialLink, "flash_quest_catalog"))
+
+    def test_lora_devices_are_s3_radios(self):
+        self.assertIn("PDA", LORA_DEVICES)
+        self.assertIn("ANOMALY", LORA_DEVICES)
+        self.assertIn("SAFE_ZONE", LORA_DEVICES)
+        self.assertNotIn("CHIP_BOX", LORA_DEVICES)
+        self.assertNotIn("TERMINAL", LORA_DEVICES)
 
 
 if __name__ == "__main__":

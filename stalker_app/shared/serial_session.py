@@ -1,7 +1,8 @@
 """
 Общий USB Serial для модулей приложения мастера.
-Одно устройство на ПК (CHIP_BOX / полевое / Мастер-Пульт).
-ПДА игрока — LoRa по № или EEPROM-чип, не кабель к каждому ПДА.
+Одно USB-устройство на ПК мастера (CHIP_BOX для чипов; ПДА или поле с Ra-01 для LoRa).
+Пульт — программа stalker_app, не отдельный ESP.
+ПДА игрока в поле — LoRa по № или EEPROM-чип, не кабель к каждому ПДА.
 """
 
 import os
@@ -79,7 +80,7 @@ class SerialSession:
 
     def _need_usb(self):
         if not self.link.connected:
-            return "Подключите устройство мастера по USB (CHIP_BOX / Мастер-Пульт)"
+            return "Подключите устройство мастера по USB (CHIP_BOX / ПДА / поле)"
         return None
 
     def _need_eeprom(self):
@@ -124,8 +125,9 @@ class SerialSession:
         ok, resp = self.link.query_ok(cmd)
         if not ok and resp and "NO_LORA" in resp:
             return False, (
-                "На этом USB нет LoRa (CHIP_BOX/терминал). "
-                "Нужен Мастер-Пульт. Команда сохранена в журнале."
+                "На этом USB нет LoRa (CHIP_BOX / терминал). "
+                "Подключите ПДА или полевое устройство с Ra-01 — "
+                "программа мастера шлёт LORA_TX, радио на ESP."
             )
         return ok, resp or self.link.last_error
 

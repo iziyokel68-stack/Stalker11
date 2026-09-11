@@ -44,7 +44,8 @@ def build_anomaly_config(d: Mapping) -> str:
         f"tgt={_i(d, 'anom_target')},"
         f"erupt={_i(d, 'anom_erupt', 30)},"
         f"hits={_i(d, 'anom_hits', 3)},"
-        f"rad={_i(d, 'anom_radius', 5)}"
+        f"rad={_i(d, 'anom_radius', 5)},"
+        f"uwb_id={_i(d, 'anom_uwb_id')}"
     )
 
 
@@ -62,7 +63,8 @@ def build_shelter_config(d: Mapping) -> str:
         f"cat=1,sz_hp={hp_tick},sz_hp_frq={hp_freq},"
         f"sz_rad={_i(d, 'sz_rad', 2)},sz_rad_frq={_i(d, 'sz_rad_freq', 60)},"
         f"sz_emission={1 if d.get('sz_emission') else 0},"
-        f"{prot_parts},rad={_i(d, 'sz_radius', 10)}"
+        f"{prot_parts},rad={_i(d, 'sz_radius', 10)},"
+        f"uwb_id={_i(d, 'sz_uwb_id')}"
     )
 
 
