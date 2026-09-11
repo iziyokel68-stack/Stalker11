@@ -38,6 +38,11 @@ class Msg(IntEnum):
     # 9  — резерв
     # 10 — резерв (ранее COMBO, заменён форматом DAMAGE+val3)
     RADIO      = 11  # val1=track_id, val2=volume
+    ZONE_HELLO   = 20  # ПДА → аномалия, запрос слота UWB
+    ZONE_ASSIGN  = 21  # аномалия → ПДА, val1=slot
+    SLOT_READY   = 22  # ПДА → аномалия, tag SETCFG принят
+    SLOT_RELEASE = 23  # ПДА → аномалия, выход / таймаут
+    ENTRY_OK     = 24  # ПДА → убежище, вход по метрам
 
 
 # =====================================================

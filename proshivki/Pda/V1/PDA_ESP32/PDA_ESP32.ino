@@ -1,6 +1,6 @@
 /**
  * ╔══════════════════════════════════════════════════╗
- * ║     S.T.A.L.K.E.R. ПДА — Прошивка ESP32 v2.7   ║
+ * ║     S.T.A.L.K.E.R. ПДА — Прошивка ESP32 v2.8   ║
  * ║       Плата: ESP32-S3-N16R8 (DevKitC-1)         ║
  * ╠══════════════════════════════════════════════════╣
  * ║ CONFIG:FUNC / CONFIG:PRESET через USB Serial     ║
@@ -14,7 +14,7 @@
  * ║ • Громкость — страница «НАСТРОЙКИ» (не жесты)        ║
  * ║ • LED G15/G16, вибро G21, DFPlayer Serial2           ║
  * ║ • BU03 Serial1 G1/G2, BU03_PWR G42                   ║
- * ║ • LoRa SPI G39/G40/G41, RST=G12 shared с TFT         ║
+ * ║ • LoRa SPI G39/G40/G41, RST не пульсировать (G12=TFT) ║
  * ║ • Питание ПДА — ключ PWR; DFPlayer вместе с ПДА      ║
  * ╠══════════════════════════════════════════════════╣
  * ║ UI (целевая модель batch 2, июнь 2026):          ║
@@ -73,8 +73,10 @@
 #include "tft_panel.h"
 
 #define LORA_CS 39
-#define LORA_RST TFT_RST // G12 — shared with TFT (no pulse at runtime)
 #define LORA_DIO0 41
+#define LORA_SCK TFT_SCK
+#define LORA_MISO TFT_MISO
+#define LORA_MOSI TFT_MOSI
 
 // Кнопки (4 шт, INPUT_PULLUP)
 #define BTN_DN 4
@@ -137,6 +139,9 @@ struct Packet {
 };
 #pragma pack(pop)
 
+#include "zone_msgs.h"
+#include "lora_link.h"
+
 // Emitter (protocol.py)
 #define EMITTER_SYSTEM 0
 #define EMITTER_PLAYER 1
@@ -152,6 +157,7 @@ struct Packet {
 #define MSG_SAFE_ZONE 7
 #define MSG_EMISSION 8
 #define MSG_RADIO 11
+// MSG_ZONE_* — zone_msgs.h
 
 #define CMD_KILL 0
 #define CMD_REVIVE 1
@@ -247,6 +253,21 @@ volatile int16_t incomingRadioVol = 0;
 volatile bool incomingFromPlayer = false;
 volatile bool incomingControllerPsi = false;
 uint8_t anomalyMac[6] = {0};
+bool loraOk = false;
+int zoneSlot = -1;
+uint8_t zoneAnomMac[6] = {0};
+volatile bool pendingZoneAssign = false;
+volatile int pendingZoneSlot = -1;
+uint8_t pendingZoneMac[6] = {0};
+uint32_t lastZoneHelloMs = 0;
+uint32_t lastZoneAssignMs = 0;
+int16_t szRadiusM = 10;
+bool uwbInShelter = false;
+bool wantShelterUwb = false;
+uint8_t shelterMac[6] = {0};
+uint32_t lastShelterUwbSetMs = 0;
+uint32_t lastEntryOkMs = 0;
+bool bu03Present = false;
 // Регистрация: playerRegistered + playerName[] через ПК/EEPROM (programmer.py); до регистрации — пустой экран
 // Античит: cheatShieldCount (NVS) — инкремент при экранировании ESP-NOW; без штрафа HP
 
@@ -2399,7 +2420,20 @@ String parseStringValue(const String &s, const String &key) {
 
 void handleSerialConfig(const String &line) {
   if (line.startsWith("STALKER_WHO")) {
-    Serial.println("STALKER:PDA:v2.7");
+    Serial.println("STALKER:PDA:v2.8");
+    return;
+  }
+
+  if (line.startsWith("LORA_TX:")) {
+    if (!loraOk) {
+      Serial.println("ERROR:NO_LORA");
+      return;
+    }
+    uint8_t src = (uint8_t)constrain(playerEventId, 0, 255);
+    if (stalkerHandleLoraTxLine(line, src))
+      Serial.println("OK");
+    else
+      Serial.println("ERROR:BAD_LORA");
     return;
   }
 
@@ -2690,7 +2724,13 @@ uint32_t lastSafeZoneMs = 0;
 int zoneProt[8] = {0};
 
 bool isInSafeZone() {
-  return lastSafeZoneMs > 0 && (millis() - lastSafeZoneMs < SZ_TIMEOUT_MS);
+  bool recent = lastSafeZoneMs > 0 && (millis() - lastSafeZoneMs < SZ_TIMEOUT_MS);
+  if (!recent)
+    return false;
+  if (!bu03Present)
+    return true;
+  /* После входа по метрам — защёлка, не непрерывный UWB на всю толпу. */
+  return uwbInShelter;
 }
 
 void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -2699,6 +2739,20 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   Packet pkt;
   memcpy(&pkt, data, sizeof(Packet));
+  applyIncomingPacket(pkt, info ? info->src_addr : nullptr);
+  if (pkt.emitter == EMITTER_ANOMALY &&
+      (pkt.msg_type == MSG_DAMAGE || pkt.msg_type == MSG_RADIATION))
+    noteAnomalySignal(info);
+}
+
+void applyIncomingPacket(const Packet &pkt, const uint8_t *mac) {
+  if (pkt.msg_type == MSG_ZONE_ASSIGN) {
+    pendingZoneSlot = (int)pkt.val1;
+    if (mac)
+      memcpy(pendingZoneMac, mac, 6);
+    pendingZoneAssign = true;
+    return;
+  }
 
   if (pkt.msg_type == MSG_DAMAGE && pkt.val1 > 0) {
     incomingFromPlayer = (pkt.emitter == EMITTER_PLAYER);
@@ -2706,10 +2760,13 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (!incomingFromPlayer && !(cfgFuncFlags & (1 << 5)))
       return;
     if (pkt.emitter == EMITTER_ANOMALY)
-      noteAnomalySignal(info);
+      noteAnomalySignal(nullptr);
     incomingDmgAmount = pkt.val1;
     incomingDmgMask = pkt.val3;
-    memcpy(anomalyMac, info->src_addr, 6);
+    if (mac)
+      memcpy(anomalyMac, mac, 6);
+    if (pkt.emitter == EMITTER_ANOMALY)
+      lastZoneAssignMs = millis();
     newDamageReceived = true;
 
   } else if (pkt.msg_type == MSG_HEAL && pkt.val1 > 0) {
@@ -2720,19 +2777,26 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (!(cfgFuncFlags & (1 << 1)))
       return; // RAD отключена
     if (pkt.emitter == EMITTER_ANOMALY)
-      noteAnomalySignal(info);
+      noteAnomalySignal(nullptr);
     incomingRadAmount = pkt.val1;
     newRadReceived = true;
 
   } else if (pkt.msg_type == MSG_SAFE_ZONE) {
     lastSafeZoneMs = millis();
-    if (pkt.val3 == SZ_PROT_FLAG) {
-      int t = (int)pkt.val1;
-      if (t >= 0 && t <= 7)
-        zoneProt[t] = (int)pkt.val2;
-    } else if (pkt.val3 == SZ_BEACON_FLAG) {
+    if (pkt.val3 == SZ_BEACON_FLAG) {
       szEmissionProtect = pkt.val1 != 0;
-    } else {
+      if (pkt.val2 > 0)
+        szRadiusM = pkt.val2;
+      if (mac)
+        memcpy(shelterMac, mac, 6);
+      wantShelterUwb = true;
+    } else if (pkt.val3 == SZ_PROT_FLAG) {
+      if (!bu03Present || uwbInShelter) {
+        int t = (int)pkt.val1;
+        if (t >= 0 && t <= 7)
+          zoneProt[t] = (int)pkt.val2;
+      }
+    } else if (!bu03Present || uwbInShelter) {
       szHealAmount = pkt.val1;
       szRadAmount = pkt.val2;
       newSafeZoneReceived = true;
@@ -2753,6 +2817,28 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     incomingRadioVol = pkt.val2;
     newRadioReceived = true;
   }
+}
+
+static uint8_t kBcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+void sendEspNowPkt(const uint8_t *mac, uint8_t emitter, uint8_t msg,
+                   int16_t v1, int16_t v2, int16_t v3) {
+  if (!mac)
+    return;
+  Packet pkt;
+  pkt.emitter = emitter;
+  pkt.msg_type = msg;
+  pkt.val1 = v1;
+  pkt.val2 = v2;
+  pkt.val3 = v3;
+  if (!esp_now_is_peer_exist(mac)) {
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, mac, 6);
+    peer.channel = 1;
+    peer.encrypt = false;
+    esp_now_add_peer(&peer);
+  }
+  esp_now_send(mac, (uint8_t *)&pkt, sizeof(pkt));
 }
 
 // =====================================================
@@ -2929,8 +3015,22 @@ bool initBu03() {
   }
 
   bu03Link = BU03_READY;
+  bu03Present = true;
   bu03StoreRaw(bu03Rx);
+  bu03SendCmd("AT+SETUWBMODE=0", false);
   Serial.println("[BU03] AT OK");
+  return true;
+}
+
+bool bu03SetCfg(int id, int role) {
+  char cmd[48];
+  snprintf(cmd, sizeof(cmd), "AT+SETCFG=%d,%d,%d,%d", id, role, BU03_CH_POLY,
+           BU03_RATE_POLY);
+  if (!bu03SendCmd(cmd, false) || bu03Rx.indexOf("ERR") >= 0) {
+    Serial.printf("[BU03] SETCFG id=%d role=%d FAIL\n", id, role);
+    return false;
+  }
+  bu03SendCmd("AT+SAVE", false);
   return true;
 }
 
@@ -3684,7 +3784,7 @@ void setup() {
 
   // Сплеш (320×240)
   printRus(72, 72, "S.T.A.L.K.E.R.", C_GREEN);
-  printRus(108, 100, "PDA v2.7", C_LGRAY);
+  printRus(108, 100, "PDA v2.8", C_LGRAY);
 
   delay(500);
   printRus(108, 128, "Wi-Fi...", C_CYAN);
@@ -3698,6 +3798,10 @@ void setup() {
     printRus(72, 156, "ESP-NOW ОШИБКА!", C_RED);
   } else {
     esp_now_register_recv_cb(OnDataRecv);
+    esp_now_peer_info_t bcast = {};
+    memcpy(bcast.peer_addr, kBcastMac, 6);
+    bcast.channel = 1;
+    esp_now_add_peer(&bcast);
     printRus(96, 156, "ESP-NOW OK", C_CYAN);
   }
 
@@ -3720,6 +3824,9 @@ void setup() {
     printRus(72, 228, "UWB: нет связи", C_RED);
   }
 
+  loraOk = stalkerLoraBegin();
+  Serial.println(loraOk ? "[LoRa] OK" : "[LoRa] FAIL — нет Ra-01?");
+
   delay(2000);
   tft.fillScreen(C_BLACK);
 
@@ -3728,7 +3835,7 @@ void setup() {
   lastDeathAtLevelUp = playerDeaths;
   grantAchievement(ACH_START_FIRST);
   bu03LastPollMs = millis();
-  Serial.println("PDA v2.7 READY");
+  Serial.println("PDA v2.8 READY");
   Serial.print("FUNC flags=");
   Serial.println(cfgFuncFlags);
   Serial.print("maxHP=");
@@ -3754,6 +3861,41 @@ void loop() {
     if (line.length() > 0) {
       handleSerialConfig(line);
     }
+  }
+
+  if (loraOk) {
+    Packet lpkt;
+    char ltxt[49];
+    uint8_t myLora = (uint8_t)constrain(playerEventId, 0, 255);
+    if (stalkerLoraPoll(myLora, &lpkt, ltxt, sizeof(ltxt))) {
+      if (ltxt[0])
+        setEvent(ltxt, C_YELLOW, true);
+      else
+        applyIncomingPacket(lpkt, nullptr);
+    }
+  }
+
+  if (pendingZoneAssign) {
+    pendingZoneAssign = false;
+    if (bu03Link != BU03_OFF && bu03Link != BU03_NO_LINK &&
+        bu03SetCfg(pendingZoneSlot, 0)) {
+      zoneSlot = pendingZoneSlot;
+      memcpy(zoneAnomMac, pendingZoneMac, 6);
+      lastZoneAssignMs = millis();
+      sendEspNowPkt(zoneAnomMac, EMITTER_PLAYER, MSG_SLOT_READY, zoneSlot, 0, 0);
+    }
+  }
+
+  if (!admitPending && !playerDead &&
+      millis() - lastZoneHelloMs >= ZONE_HELLO_MS) {
+    lastZoneHelloMs = millis();
+    sendEspNowPkt(kBcastMac, EMITTER_PLAYER, MSG_ZONE_HELLO,
+                  (int16_t)playerEventId, 0, 0);
+  }
+
+  if (zoneSlot >= 0 && millis() - lastZoneAssignMs > ZONE_SLOT_TIMEOUT_MS) {
+    sendEspNowPkt(zoneAnomMac, EMITTER_PLAYER, MSG_SLOT_RELEASE, zoneSlot, 0, 0);
+    zoneSlot = -1;
   }
 
   // ─── Обработка DAMAGE (аномалии / PvP / пси) ───
@@ -3972,6 +4114,26 @@ void loop() {
     pollBu03Distance();
     if (currentPage == 2 && menuSub == 5)
       needFullRedraw = true;
+  }
+
+  if (wantShelterUwb && zoneSlot < 0 &&
+      (lastSafeZoneMs == 0 || millis() - lastSafeZoneMs > SZ_TIMEOUT_MS)) {
+    wantShelterUwb = false;
+    uwbInShelter = false;
+  }
+  /* UWB только на входе: BU03 не тянет 30 якорей с одним ID.
+     Внутри зоны держимся по ESP-NOW beacon, якорь id=0 отпускаем. */
+  if (wantShelterUwb && zoneSlot < 0 && !uwbInShelter &&
+      bu03Link != BU03_OFF && bu03Link != BU03_NO_LINK) {
+    if (millis() - lastShelterUwbSetMs > 20000UL) {
+      lastShelterUwbSetMs = millis();
+      bu03SetCfg(0, 1);
+    }
+    if (bu03DistM >= 0.0f && bu03DistM <= (float)szRadiusM) {
+      uwbInShelter = true;
+      lastEntryOkMs = millis();
+      sendEspNowPkt(shelterMac, EMITTER_PLAYER, MSG_ENTRY_OK, 0, 0, 0);
+    }
   }
 
   // ─── Перерисовка экрана (5 FPS) ───

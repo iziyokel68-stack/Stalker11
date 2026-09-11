@@ -1,6 +1,6 @@
 """
 Программатор внутри окна мастера (не отдельный pygame).
-USB — CHIP_BOX / аномалия / убежище / ПДА на столе / терминал.
+USB — CHIP_BOX стол мастера / аномалия / убежище / ПДА на столе / терминал.
 ПДА игрока в поле — через LoRa или EEPROM-чип, не этим модулем.
 """
 
@@ -329,7 +329,9 @@ class ProgrammerFrame(ttk.Frame):
         self._row(f, "Перезарядка HP, сек", self.var_anom_freq)
         self._row(f, "Извержение, сек", self.var_anom_erupt)
         self._row(f, "Попадания", self.var_anom_hits)
-        self._row(f, "Радиус", self.var_anom_radius)
+        self._row(f, "Радиус, м (UWB)", self.var_anom_radius)
+        self.var_anom_uwb_id = tk.StringVar(value="0")
+        self._row(f, "UWB ID (0 = авто)", self.var_anom_uwb_id)
 
         rec = ttk.Frame(f)
         rec.pack(fill="x", padx=8, pady=4)
@@ -360,7 +362,9 @@ class ProgrammerFrame(ttk.Frame):
         self._row(f, "Интервал HP, сек", self.var_sz_hp_freq)
         self._row(f, "Очистка RAD", self.var_sz_rad)
         self._row(f, "Интервал RAD, сек", self.var_sz_rad_freq)
-        self._row(f, "Радиус", self.var_sz_radius)
+        self._row(f, "Радиус, м (вход UWB)", self.var_sz_radius)
+        self.var_sz_uwb_id = tk.StringVar(value="0")
+        self._row(f, "UWB ID tag (0 = авто)", self.var_sz_uwb_id)
         ttk.Checkbutton(f, text="Защита от выброса",
                         variable=self.var_sz_emission).pack(anchor="w", padx=8, pady=4)
         prot = ttk.LabelFrame(f, text="Защиты %")
@@ -468,6 +472,7 @@ class ProgrammerFrame(ttk.Frame):
             "anom_erupt": self._i(self.var_anom_erupt, 30),
             "anom_hits": self._i(self.var_anom_hits, 3),
             "anom_radius": self._i(self.var_anom_radius, 5),
+            "anom_uwb_id": self._i(self.var_anom_uwb_id, 0),
             "anom_rad_on": bool(self.var_anom_rad_on.get()),
             "anom_rad_dmg": self._i(self.var_anom_rad_dmg),
             "anom_rad_freq": self._i(self.var_anom_rad_freq, 10),
@@ -482,6 +487,7 @@ class ProgrammerFrame(ttk.Frame):
             "sz_hp_freq": self._i(self.var_sz_hp_freq, 30),
             "sz_rad_freq": self._i(self.var_sz_rad_freq, 60),
             "sz_radius": self._i(self.var_sz_radius, 10),
+            "sz_uwb_id": self._i(self.var_sz_uwb_id, 0),
             "sz_emission": bool(self.var_sz_emission.get()),
             "sz_prot": [self._i(v) for v in self.sz_prot],
         }

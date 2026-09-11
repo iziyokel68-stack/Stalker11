@@ -492,8 +492,8 @@ TFT, I2C, DFPlayer, кнопки, вибро, TCA — **не подключаю�
 | ПДА: UART G1/G2, `BU03_PWR` G42, опрос дистанции | ✅ v2.7 |
 | ЗЗ: стенд anchor↔tag, порог входа | ✅ настроено на стенде |
 | ЗЗ: ESP-NOW beacon (`Field_ESP32` cat=1) | ✅ фаза 2.5 |
-| Аномалия: слоты, `ZONE_ASSIGN`, `AT+DISTANCE` в `Field_ESP32` | ⏳ не в коде |
-| ПДА: `ENTRY_OK`, `uwb_zone_id` в боевой логике | ⏳ |
+| Аномалия: слоты, `ZONE_ASSIGN`, `AT+DISTANCE` в `Field_ESP32` | ✅ v1.2 |
+| ПДА: `ENTRY_OK`, слот tag / ЗЗ anchor в боевой логике | ✅ v2.8 |
 | Включение BU03 по RSSI при приближении | ⏸ после сборки платы |
 | Калибровка `AT+SETDEV` на полигоне | ⏳ |
 

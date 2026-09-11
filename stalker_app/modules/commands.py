@@ -23,8 +23,8 @@ class CommandsFrame(ttk.Frame):
 
         ttk.Label(
             body,
-            text="ПДА игрока: LoRa на ID события или чип в CHIP_BOX. "
-                 "Имена в эфир не ходят. USB — устройство мастера, не кабель к каждому ПДА.",
+            text="ПДА игрока: LoRa со стола мастера (CHIP_BOX + Ra-01) или чип EEPROM. "
+                 "Имена в эфир не ходят. USB — этот стол, не кабель к каждому ПДА.",
             style="Dim.TLabel", wraplength=820,
         ).pack(anchor="w", pady=(0, 10))
 

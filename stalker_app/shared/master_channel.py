@@ -27,7 +27,7 @@ CMD_REVIVE = 1
 CMD_ADMIT = 7
 
 EEPROM_DEVICES = {"CHIP_BOX", "TERMINAL", "CASHIER"}
-LORA_DEVICES = {"MASTER_PULT", "PULT", "PDA"}  # PDA — только стенд, не канон
+LORA_DEVICES = {"CHIP_BOX", "PDA", "ANOMALY", "SAFE_ZONE", "MASTER_PULT", "PULT"}
 
 
 def player_id_from_target(target: str) -> int:
