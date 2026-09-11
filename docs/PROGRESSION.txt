@@ -1,7 +1,8 @@
 # S.T.A.L.K.E.R. PDA — Прогрессия (полный справочник)
 # Версия: 1.3 | Дата: 26.06.2026
 # Связанные документы: MASTER_SPECIFICATION.md §8.5, komponenty.txt, ROADMAP.md, COMMUNICATION_CANON.md
-# Прошивка: proshivki/Pda/V1/PDA_ESP32.ino v2.5+
+# Прошивка: proshivki/Pda/V1/PDA_ESP32/PDA_ESP32.ino
+# Заливка: proshivki/FLASHING.md
 # Терминал + ПК-приложение: §9–§10 (бывш. ROADMAP_TERMINAL.md, ROADMAP_STALKER_APP.md)
 #
 # Иерархия: ROADMAP.md — фазы + нарратив по терминалам (раздел после фазы 5).

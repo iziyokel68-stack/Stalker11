@@ -1,10 +1,10 @@
-# Stalker PDA v3 — краткая спека для проверки платы
+# Stalker PDA v3 — АРХИВ (не заказывать)
 
-*2026-06-26 · Для разработчиков PCB*
+*Актуальная плата — V5, см. `hardware/PCB_PROJECT.md`. Этот файл — краткая спека v3 для справки по пинам.*
 
-**Эталон логики и обвязки:** `hardware/schematic.html` (единственный HTML-эталон)  
-**Эталон габаритов и расстановки:** `hardware/STALKER_PDA_v3.0/*.kicad_pcb`  
-**Полная спека:** `MASTER_SPECIFICATION.md` §3 · **BOM:** `komponenty.txt`
+**Эталон логики:** `hardware/schematic.html`  
+**Габариты v3:** `hardware/STALKER_PDA_v3.0/*.kicad_pcb`  
+**Пины:** `MASTER_SPECIFICATION.md` §3 · **BOM:** `docs/komponenty.txt`
 
 ---
 

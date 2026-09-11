@@ -42,7 +42,7 @@
 
 #include <Wire.h>
 #include <string.h>
-#include "../../common/eeprom_protocol.h"
+#include "eeprom_protocol.h"
 
 // ─────────────────────────────────────────────────────
 //  ПИНЫ

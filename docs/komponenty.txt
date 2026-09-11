@@ -5,7 +5,7 @@
 # Потребление: hardware/POTREBLENIE.pdf
 # Решения 11.06.2026: см. REPORTS.md v6.5 и MASTER_SPEC «Принятые решения»
 # PCB v3.0 (17.06.2026): STALKER_PDA_v3.0/ — LOGIC + POWER
-# Терминалы TXN (22.06.2026): Cashier_ESP32.ino, eeprom_txn.h — кабель кассы на CH0
+# Терминалы TXN: Terminal_ESP32.ino, eeprom_txn.h — кабель на CH0
 
 # LoRa стенд (9.06.2026): 2× Ra-01 433 МГц — 1 неисправен, заказать замену
 # Антенна LoRa 433 МГц (пружина/шток на Ra-01) — 1 на каждый Ra-01 с TX

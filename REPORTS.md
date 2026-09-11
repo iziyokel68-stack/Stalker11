@@ -1,6 +1,6 @@
 # 📜 Лог разработки и отчёты (REPORTS)
 
-Журнал изменений проекта. Спецификация — `MASTER_SPECIFICATION.md`, план — `ROADMAP.md`, свод каналов — `docs/COMMUNICATION_CANON.md`.
+Исторический журнал (как принимали решения). **Не** источник текущего статуса: план — `ROADMAP.md`, заливка — `proshivki/FLASHING.md`, каналы — `docs/COMMUNICATION_CANON.md`.
 
 ---
 

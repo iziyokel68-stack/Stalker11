@@ -1,22 +1,18 @@
 /**
- * S.T.A.L.K.E.R. — Полевое Устройство (Field_ESP32) v1.0
+ * S.T.A.L.K.E.R. — Полевое устройство (Field_ESP32) v1.1
  * Универсальная прошивка: Аномалия (cat=0) / Убежище (cat=1)
  *
- * Железо (целевое): ESP32-S3-N16R8 + BU03-Kit + LoRa SX1278.
- * Пины LoRa / BU03 — как на ПДА (MASTER_SPECIFICATION.md ч.3):
- *   LoRa SPI: CS=G39, RST=G12, DIO0=G41, SCK=G13, MOSI=G14, MISO=G40
- *   BU03 UART: RX=G1, TX=G2, PWR=G42 (2N2222 + P-MOS)
- *   ЗЗ LED: G16 (100 Ω)
- * MVP без периферии (только ESP-NOW) — для ранних тестов протокола.
+ * Что делает этот .ino: ESP-NOW broadcast (урон / хил / beacon) + USB CONFIG_* + NVS.
+ * Чего нет: LoRa, BU03, слоты ZONE_*, гейтинг по метрам (cfgRadius в NVS не используется).
  *
- * Прошивка:
- *   1. Залить этот .ino через Arduino IDE (один раз).
- *   2. Дальше конфиг приходит от программатора по Serial:
- *        CONFIG_WRITE:cat=1,sz_hp=5,...
- *      Хранится в NVS (внутренняя флеш ESP32, не EEPROM).
- *   3. При следующем включении устройство работает в нужном режиме.
+ * Плата в IDE: ESP32S3 Dev Module (как ПДА). Пины LoRa/BU03 в коде не трогаются.
  *
- * Диагностика: только Serial Monitor (115200 бод).
+ * Заливка:
+ *   1. Этот файл — один раз через Arduino IDE.
+ *   2. USB → программатор: CONFIG_WRITE:cat=0|1,... (иначе аномалия молчит: freq=0).
+ *   3. Конфиг в NVS, переживает выключение.
+ *
+ * Serial 115200.
  */
 
 #include <WiFi.h>
@@ -57,7 +53,7 @@ int cfgDmgMask  = 1;
 int cfgDmg      = 10;
 int cfgDmgMax   = 20;
 int cfgDmgStep  = 1;
-int cfgFreq     = 10;
+int cfgFreq     = 0;
 int cfgRadDmg   = 0;
 int cfgRadFrq   = 0;
 int cfgRecharge = 0;
@@ -94,7 +90,7 @@ void loadConfig() {
     cfgDmg      = prefs.getInt("dmg",      10);
     cfgDmgMax   = prefs.getInt("dmg_max",  20);
     cfgDmgStep  = prefs.getInt("dmg_stp",  1);
-    cfgFreq     = prefs.getInt("freq",     10);
+    cfgFreq     = prefs.getInt("freq",     0);
     cfgRadDmg   = prefs.getInt("rad_dmg",  0);
     cfgRadFrq   = prefs.getInt("rad_frq",  0);
     cfgRecharge = prefs.getInt("rech",     0);
@@ -341,6 +337,8 @@ void setup() {
     Serial.println("INFO: этот id — номер железки для карты мастера");
     Serial.println("MODE: " + String(cfgCat == 0 ? "ANOMALY" : "SAFEZONE"));
     Serial.println("CONFIG:" + buildConfigStr());
+    if (cfgCat == 0 && cfgFreq <= 0)
+        Serial.println("WARN: freq=0 — урон не шлётся, пока не CONFIG_WRITE");
 
     WiFi.mode(WIFI_STA);
     WiFi.setChannel(1);

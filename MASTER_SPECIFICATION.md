@@ -1,7 +1,7 @@
 # ☢️ СТАЛКЕР ПДА — Мастер-спецификация (v6.0)
 *Последнее обновление: 2026-08-17 | Единственный источник истины по протоколу, железу и форматам*
 
-> Основные документы: **этот файл**, `ROADMAP.md`, `REPORTS.md`, `ИГРОВОЙ_СПРАВОЧНИК.md`, **`docs/COMMUNICATION_CANON.md`** (свод каналов связи и статуса).
+> Протокол, пины, форматы чипов. План — `ROADMAP.md`. Заливка — `proshivki/FLASHING.md`. Каналы — `docs/COMMUNICATION_CANON.md`. Правила для людей — `ИГРОВОЙ_СПРАВОЧНИК.md`. Прогрессия (числа) — `docs/PROGRESSION.txt`. PCB сейчас — `hardware/PCB_PROJECT.md` (V5; v3 в этом файле — архив пинов).
 
 ---
 
@@ -11,46 +11,24 @@
 
 ```
 Stalker/
-├── MASTER_SPECIFICATION.md   ← протокол, железо, чипы, UI (ЭТОТ ФАЙЛ)
-├── ROADMAP.md                ← фазы разработки
-├── REPORTS.md                ← журнал изменений
-├── ИГРОВОЙ_СПРАВОЧНИК.md     ← игровые механики (без кода)
-├── docs/COMMUNICATION_CANON.md ← свод: каналы связи, слоты, статус проекта
+├── MASTER_SPECIFICATION.md   ← протокол, пины, чипы
+├── ROADMAP.md                ← что сделано / не сделано
+├── ИГРОВОЙ_СПРАВОЧНИК.md     ← правила для людей
+├── docs/COMMUNICATION_CANON.md
+├── docs/PROGRESSION.txt      ← уровни, ранги, достижения
+├── proshivki/FLASHING.md     ← как заливать ESP и BU03
 │
-├── proshivki/                ← прошивки ESP32 (Arduino IDE)
-│   ├── Anomaly_GZ/Field_ESP32.ino ← аномалия + убежище (cat=0/1)
-│   ├── Pda/V1/PDA_ESP32.ino    ← ПДА (ESP32-S3, M024 320×240)
-│   ├── common/tft_panel.h      ← MADCTL 0x88, tftApplyPanel()
-│   └── Cip_Programmer/Chip_Programmer_ESP32.ino ← программатор EEPROM (ESP32-C3)
+├── proshivki/
+│   ├── Pda/V1/PDA_ESP32/PDA_ESP32.ino
+│   ├── Anomaly_GZ/Field_ESP32.ino
+│   ├── Terminal/Terminal_ESP32/
+│   ├── Cip_Programmer/Chip_Programmer_ESP32.ino
+│   └── common/               ← eeprom_*.h, mux_channels.h, tft_panel.h
 │
-├── test_firmware/            ← тесты железа, BU03, LoRa
-│   ├── Test_PDA_Hardware/    ← комплексный тест ПДА (T1…T8)
-│   ├── TFT_Standalone_Test/  ← полный экран M024, MADCTL 0x88 ✅ 17.08.2026
-│   ├── EEPROM_TCA_Test/      ← стенд TCA9548A + EEPROM (v1.1) ✅ PASS 10.06.2026
-│   ├── LoRa_Test_Sender/
-│   ├── LoRa_Test_Receiver/
-│   ├── BU03_Distance_AT.ino
-│   └── BU03_ID_Test.ino
-│
-├── programmat_pc/            ← программатор (Python)
-│   ├── programmer.py         ← GUI: ЧИП / АНОМАЛИЯ / УБЕЖИЩЕ / ПДА / ТЕРМИНАЛ
-│   ├── serial_link.py        ← USB Serial + команды CONFIG:* (общий с stalker_app)
-│   ├── game_logic.py         ← игровая логика (эталон правил)
-│   └── protocol.py           ← ЭТАЛОН протокола v4.2 — НЕ МЕНЯТЬ
-│
-├── stalker_app/              ← программа мастера (Tkinter)
-│   └── main.py               ← событие, участники, оповещения, задания, статистика
-│
-├── mobilny_programmat/       ← программатор Android (Flutter, USB OTG)
-│   └── lib/main.dart
-│
-└── hardware/                 ← KiCad + схема + BOM
-    ├── STALKER_PDA_v3.0/     ← PCB LOGIC + POWER (эталон для заказа)
-    ├── BOARD_SPEC_v3_FOR_REVIEW.md ← краткая спека платы
-    ├── schematic.html        ← интерактивная схема (единственный HTML-эталон)
-    ├── komponenty.txt        ← BOM (ПДА + поле + пассивка)
-    ├── PROGRESSION.txt       ← уровни, ранги, достижения
-    └── POTREBLENIE.pdf       ← потребление по режимам
+├── stalker_app/              ← программа мастера
+├── programmat_pc/            ← protocol.py, game_logic.py, programmer
+├── test_firmware/            ← стенды, не полигон
+└── hardware/PCB_PROJECT.md   ← PCB V5; v3.0 — архив
 ```
 
 ### Назначение файлов
@@ -238,7 +216,7 @@ pkt2  = Packet.unpack(data)      # ← 8 байт
 
 | Тема | Решение |
 |---|---|
-| **Эталон схемы** | `hardware/schematic.html` + `hardware/komponenty.txt` |
+| **Эталон схемы** | `hardware/schematic.html` + `docs/komponenty.txt` |
 | **Эталон PCB** | `hardware/STALKER_PDA_v3.0/` — две платы LOGIC + POWER |
 | **Пассивка ПДА** | Полный список в BOM ниже; **R8 10 kΩ** на затвор P-MOS BU03 — обязателен |
 | **Физические ключи** | **PWR** (разрыв АКБ). **SND нет** — громкость в НАСТРОЙКАХ на экране. **VIB** (разрыв 5V→вибро, если установлен). **BL** — входы G37/G38; LED TFT → 3V3. **G47/G48 не используются** |
@@ -344,7 +322,7 @@ pkt2  = Packet.unpack(data)      # ← 8 байт
 
 ### Сборка ПДА v3.0 — что паять
 
-*Чеклист сборки в `ROADMAP.md` (фаза 3); полный BOM — `hardware/komponenty.txt`.*
+*Чеклист сборки в `ROADMAP.md` (фаза 3); полный BOM — `docs/komponenty.txt`.*
 
 | Компонент / действие | Плата / примечание |
 |---|---|
@@ -367,7 +345,7 @@ pkt2  = Packet.unpack(data)      # ← 8 байт
 
 #### Пассивка и обвязка LOGIC/POWER v3.0
 
-*Номиналы и refdes — `hardware/schematic.html` (эталон логики). Расстановка — `hardware/STALKER_PDA_v3.0/*.kicad_pcb`. Сводный BOM — `hardware/komponenty.txt`.*
+*Номиналы и refdes — `hardware/schematic.html` (эталон логики). Расстановка — `hardware/STALKER_PDA_v3.0/*.kicad_pcb`. Сводный BOM — `docs/komponenty.txt`.*
 
 > KiCad-схемы v3.0 — **stub** (без netlist); на шелкографии PCB refdes могут отличаться от эталона (см. колонку «Silk PCB»). **Не путать:** footprint `PDA_ST:R 220` используется для разных номиналов — ориентир по **номиналу из таблицы**, не по Value в KiCad.
 
@@ -714,7 +692,7 @@ ESP **не** прошивает STM в поле — только AT-команд
 | MOSFET | P-MOS AO3401 | 1 | Ключ 3.3 V на BU03 |
 
 > Пины LoRa и BU03 — **идентичны ПДА**. Питание полевого устройства: **TPS63020 3.3 V**.  
-> Полный список: `hardware/komponenty.txt`.
+> Полный список: `docs/komponenty.txt`.
 
 > Чипы не расходуются физически! Программатор перезаписывает их — 200 чипов на сезон, используются годами.
 
@@ -854,7 +832,7 @@ bool tcaSelect(uint8_t channel) {
 ### KiCad (`hardware/STALKER_PDA_v3.0/`)
 
 - Проекты: `STALKER_PDA_LOGIC.kicad_pro`, `STALKER_PDA_POWER.kicad_pro`
-- BOM: `hardware/komponenty.txt`
+- BOM: `docs/komponenty.txt`
 - DRC: 0 ошибок перед заказом; GND-полигон; RF-модули на краю POWER
 
 ### Python → C++ (таблица портирования)
@@ -1002,7 +980,7 @@ CONFIG_WRITE:type=T,sub=S,uses=U,p0=V0,p1=V1,...,p15=V15
 | `EEPROM_TCA_Test.ino` — стенд TCA + 2× EEPROM (WROOM32 / S3) | ✅ **PASS 10.06.2026** |
 | Железо: TCA9548A + 2× 24LC256 через CH0/CH2 | ✅ **Проверено на стенде** |
 | `mux_channels.h` + `eeprom_protocol.h` + `eeprom_txn.h` | ✅ **Протокол v1 в коде** |
-| `proshivki/Cashier/Cashier_ESP32.ino` — терминал кассы (TXN @0x80) | ✅ v1.0 |
+| `proshivki/Terminal/Terminal_ESP32/` — терминал (TXN @0x80) | ✅ v1 |
 | `programmat_pc/eeprom_txn.py` + `test_eeprom_txn.py` | ✅ |
 | `proshivki/Pda/V1/PDA_ESP32.ino` — опрос TXN на CH0 (purchase/bank/quest/admit) | ✅ |
 | `proshivki/Pda/V1/PDA_ESP32.ino` — приём `CONFIG:FUNC` / `CONFIG:PRESET` через Serial + NVS | ✅ v2.4+ |
@@ -1532,7 +1510,7 @@ player.apply_damage(...)
 
 ## 🎖️ ЧАСТЬ 8.5: Прогрессия — уровни, ранги, достижения (v4)
 
-> **Полный справочник (62 достижения, таблица 100 уровней):** `hardware/PROGRESSION.txt`  
+> **Полный справочник (62 достижения, таблица 100 уровней):** `docs/PROGRESSION.txt`  
 > Аналогия: **Fallout 4** + **Warframe Mastery** + **Enlisted** (ступени достижений).
 
 ### Слоты TCA (итог, актуализировано 09.09.2026)
@@ -1573,7 +1551,7 @@ player.apply_damage(...)
 | 4 | 60 | МАСТЕР | — | 4000 | 14% |
 | 5 | 80 | ЛЕГЕНДА | `quest_15` (≥15 квестов) | 6000 | 18% |
 
-> **XP / уровни:** формулы и таблица 1–100 — `hardware/PROGRESSION.txt` §2 (ребаланс v1.2, июнь 2026).
+> **XP / уровни:** формулы и таблица 1–100 — `docs/PROGRESSION.txt` §2.
 
 Подтверждение ранга мастером — через **UI ПДА / терминал** (`CONFIG:RANK_CONFIRM` в прошивке). **Отдельный EEPROM-чип «РАНГ» не реализован** (в планах).
 
@@ -1730,125 +1708,13 @@ GPIO **G37**, **G38** — тумблер BL. **G47/G48 не используют
 Чип квеста в CH0: `modifiers.quest`, `quest_id`, `title`, `short_desc`; сдача — `complete: true`.
 Отображение — подраздел **«Активные квесты»** в меню (стр. 2), не отдельная top-level страница.
 
----
-
-## ⚡ ЧАСТЬ 11: Чеклист для новой AI-сессии
-
-- [ ] Прочитать `MASTER_SPECIFICATION.md` и `ROADMAP.md`
-- [ ] Прочитать `programmat_pc/protocol.py` (эталонный код, **не менять**)
-- [ ] Пакет = 8 байт: `[emitter][msg_type][val1][val2][val3]`
-- [ ] PCB: `hardware/STALKER_PDA_v3.0/` · схема: `hardware/schematic.html`
-- [ ] Зелёная зона: таймаут **5 секунд** без пакетов SAFE_ZONE
 
 ---
 
-## 📋 ЧАСТЬ 12: Задачи и идеи
+## Заливка, стенды, диагностика
 
-### В работе
+Arduino IDE, платы, UWB, ограничения боевых `.ino`: **`proshivki/FLASHING.md`**.
 
-См. актуальный план в **`ROADMAP.md`** (фазы 3–6).
+Стенды (`test_firmware/`): Test_PDA_Hardware, EEPROM_TCA_Test, LoRa_Test_*, BU03_*. Не ставить на полигон вместо боевых скетчей.
 
----
-
-## 🗺️ ЧАСТЬ 13: Дорожная карта
-
-Полная дорожная карта — **`ROADMAP.md`**. Свод каналов связи и статус — **`docs/COMMUNICATION_CANON.md`**.
-
-Кратко: схема и железо ✅ → PCB v3.0 **ревью ✅**, сборка → LoRa = Мастер-Пульт; UWB стенд ✅, аномалия в прошивке ⏳; терминалы = EEPROM CH0.
-
-### MVP для первого тест-дня (Фаза 3)
-
-**Комплект «Аномалия / Убежище»:**
-- ESP32-S3-N16R8 + BU03-Kit + LoRa SX1278 + TPS63020 3.3V + Li-Po
-- Пины LoRa / BU03 — **как на ПДА** (Часть 3); ЗЗ: LED G16 + 100 Ω
-- BOM и пассивка: `hardware/komponenty.txt` (разделы «Аномалия», «ЗЗ», «Пассивка (аномалия / ЗЗ)»)
-- Прошивка: `proshivki/Anomaly_GZ/Field_ESP32.ino` (`cat=0` — аномалия, `cat=1` — убежище)
-- Конфигурирование: `programmer.py` через USB Serial
-
-> Ранний MVP только ESP-NOW (без BU03/LoRa) — для проверки протокола, см. комментарий в `proshivki/Anomaly_GZ/Field_ESP32.ino`.
-
-**Комплект «ПДА»:**
-- Плата `hardware/STALKER_PDA_v3.0/` (LOGIC + POWER 140×78 mm)
-- ESP32-S3-N16R8 + ILI9341 2.4" 320×240
-- Тест EEPROM+TCA: `test_firmware/EEPROM_TCA_Test/` ✅ PASS 10.06.2026
-- Тест железа: `test_firmware/Test_PDA_Hardware.ino`
-- Прошивка ПДА: `proshivki/Pda/V1/PDA_ESP32.ino` (требует обновления пинов под S3)
-
----
-
-## 🔧 ЧАСТЬ 14: Тест железа и Arduino IDE
-
-### Библиотеки (ПДА)
-1. Adafruit GFX Library
-2. Adafruit ILI9341
-3. DFRobot DFPlayer Mini
-4. U8g2_for_Adafruit_GFX (кириллица на экране)
-
-### Тест EEPROM + TCA (стенд, без дисплея) — ✅ PASS 10.06.2026
-
-Прошивка `test_firmware/EEPROM_TCA_Test/EEPROM_TCA_Test.ino` (v1.1) — только `Wire.h`, без TFT/DFPlayer.
-
-| Параметр | Значение |
-|----------|----------|
-| Плата (стенд) | **ESP32 Dev Module** → SDA=**G21**, SCL=**G22** |
-| Плата (ПДА) | **ESP32S3 Dev Module**, USB CDC On Boot=Enabled → SDA=**G9**, SCL=**G8** |
-| TCA | **0x70** (A0–A2→GND, RST→3.3V) |
-| EEPROM | **0x50** на **CH0** и **CH2** (WP, A0–A2→GND) |
-| Serial | **115200**; команды `TEST`, `SCAN`, `CH0`…`CH7`, `HELP` |
-| Upload Speed (S3) | **115200** при ошибках esptool на 921600 |
-
-Подробно: `test_firmware/EEPROM_TCA_Test/README_EEPROM_TCA_Test.md`.
-
-### Тест без LoRa/UWB (полный ПДА)
-Прошивка `test_firmware/Test_PDA_Hardware/Test_PDA_Hardware.ino` — guided on-screen, команды T1…T8.  
-Пины по **Части 3**. BU03: `BU03_PINS_PLATE 1` (G1/G2).
-
-### LoRa — breadboard-тест (ESP32 + Ra-01)
-1. Установить библиотеку **LoRa** (Sandeep Mistry) — ZIP с GitHub, не Library Manager (403).
-2. Два ESP32 DevKit + два Ra-01 433 МГц; распайка — таблица «макет vs плата» в **Части 3**.
-3. Прошить `test_firmware/LoRa_Test_Sender/` и `test_firmware/LoRa_Test_Receiver/` (**отдельные папки** — Arduino склеивает все `.ino` в одной директории).
-4. Serial **115200**; антенна **433 МГц на обоих** модулях перед TX.
-5. Ожидание: Sender `[TX] ping #N` → Receiver `[RX] … RSSI=…`.
-6. `LoRa init FAILED` на одном ESP при рабочем втором → **swap Ra-01**; неисправный модуль заменить.
-
-### Интеграционный тест — TFT + LoRa + BU03 (10.06.2026)
-
-Прошивка `test_firmware/Test_PDA_Hardware/Test_PDA_Hardware.ino` — **открывать папку** `Test_PDA_Hardware` как скетч.
-
-| Параметр | Значение |
-|----------|----------|
-| Плата | **ESP32S3 Dev Module**, USB CDC On Boot = Enabled |
-| Serial | **115200** (логи; управление — на экране, без команд) |
-| LoRa (S3) | CS=39, MISO=40, DIO0=41, RST=12, SCK=13, MOSI=14 |
-| BU03 (плата) | **Serial1** RX=G1, TX=G2, `BU03_PWR`=G42 |
-| BU03 (макет) | Переназначить `BU03_RX`/`BU03_TX` на G17/G18 |
-| Библиотеки | Adafruit GFX, ILI9341, DFRobot DFPlayer Mini, U8g2_for_Adafruit_GFX |
-
-**Поток:** guided on-screen — кнопки → тумблеры → вибро → звук → UWB → LED → I2C → LoRa → итог. Успех: все фазы пройдены, LoRa REG=0x12, BU03 отвечает на AT.
-
-### Первый тест связи (ESP-NOW)
-1. Прошить `proshivki/Anomaly_GZ/Field_ESP32.ino` (аномалия) и `proshivki/Pda/V1/PDA_ESP32.ino` (ПДА)
-2. Оба: `WiFi.mode(WIFI_STA)` + `esp_now_init()`
-3. Аномалия шлёт DAMAGE → на ПДА падает HP, уходит ACK
-
-### Диагностика
-
-| Симптом | Причина | Решение |
-|---|---|---|
-| Белый экран | CS/DC/RST, 3V3 | Прозвон G10–G14, G12 |
-| Полоса ~80 px снизу | Adafruit `setRotation(1/3)`, MV не работает | `tftApplyPanel()` — MADCTL **0x88** |
-| Полоса ~80 px справа | `setRotation(0/2)` = 240×320 | только альбом 320×240 + `tft_panel.h` |
-| Картинка отзеркалена | MADCTL 0xC8 (лишний MX) | **0x88** (MY\|BGR) |
-| Красный ↔ синий | панель BGR | `TFT_BGR_SWAP` / `C_RED=0x001F` |
-| Brownout | LoRa TX + UWB вместе | Разнести по времени в коде |
-| LoRa init FAILED | Мёртвый Ra-01, MISO, 3.3V | Swap-модуль; REG_VERSION через SPI (Receiver-скетч) |
-| LoRa TX есть, RX нет | Разные SF/sync word; битый модуль на TX | Одинаковые параметры; swap-тест |
-| Library Manager 403 | CDN Arduino | LoRa ZIP с GitHub → «Добавить .ZIP библиотеку» |
-| DFPlayer молчит | Нет SD, нет 5V | `mp3/0001.mp3`, питание 5V BUS |
-| EEPROM не читается | WP не на GND, нет TCA, неверный канал | `EEPROM_TCA_Test` или T8; SDA=G9 SCL=G8 (S3), G21/G22 (WROOM) |
-| TCA не найден на 0x70 | A0–A2 не на GND, RST не на 3.3V | A0–A2→GND, RST→3.3V, подтяжки SDA/SCL |
-| Горячий провод GND | КЗ 3.3V↔GND, перепутаны пины EEPROM | Отключить питание; чеклист в README EEPROM_TCA_Test |
-| LoRa OK, пропадает с экраном | SPI collision / G12 reset | Фаза LoRa в `Test_PDA_Hardware`; не reset G12 в runtime |
-| BU03 NO SIGNAL с TFT+LoRa | UART buffer / loop / питание | `setRxBufferSize(1024)`; фаза UWB; G42 / 3.3V |
-| BU03 на G17, DFPlayer позже | Конфликт UART | На плате перенести BU03 на **G1/G2** |
-| esptool «chip stopped responding» (S3) | Upload 921600, плохой USB | Upload Speed **115200**, другой кабель, BOOT+RESET |
+План работ: **`ROADMAP.md`**. Каналы: **`docs/COMMUNICATION_CANON.md`**.

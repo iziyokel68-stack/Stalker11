@@ -29,4 +29,4 @@
 | Тест экрана (полный кадр) | `test_firmware/TFT_Standalone_Test/` |
 | Тест ПДА + касса | `test_firmware/PDA_TXN_Test/PDA_TXN_Test.ino` |
 
-Открывайте `.ino` **File → Open** из репозитория, не копируйте во Temp.
+Открывайте `.ino` **File → Open** из репозитория. Как заливать: `proshivki/FLASHING.md`.
